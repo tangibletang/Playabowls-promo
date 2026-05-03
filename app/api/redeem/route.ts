@@ -1,4 +1,4 @@
-import { kv } from '@vercel/kv'
+import { getRedis } from '@/lib/redis'
 import { NextRequest, NextResponse } from 'next/server'
 
 interface CodeRecord {
@@ -13,7 +13,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'invalid' }, { status: 404 })
   }
 
-  const raw = await kv.hget<string>('codes', code)
+  const redis = await getRedis()
+  const raw = await redis.hGet('codes', code)
   if (raw === null || raw === undefined) {
     return NextResponse.json({ error: 'invalid' }, { status: 404 })
   }
@@ -36,7 +37,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid' }, { status: 404 })
   }
 
-  const raw = await kv.hget<string>('codes', code)
+  const redis = await getRedis()
+  const raw = await redis.hGet('codes', code)
   if (raw === null || raw === undefined) {
     return NextResponse.json({ error: 'invalid' }, { status: 404 })
   }
@@ -52,7 +54,7 @@ export async function POST(req: NextRequest) {
 
   const redeemedAt = new Date().toISOString()
   const updated: CodeRecord = { redeemed: true, redeemedAt }
-  await kv.hset('codes', { [code]: JSON.stringify(updated) })
+  await redis.hSet('codes', code, JSON.stringify(updated))
 
   return NextResponse.json({ success: true, redeemedAt })
 }

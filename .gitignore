@@ -1,6 +1,7 @@
 .next/
 node_modules/
 .env.local
+.env.development.local
 *.csv
 *.pdf
 coupon-bg.*

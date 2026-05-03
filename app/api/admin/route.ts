@@ -1,4 +1,4 @@
-import { kv } from '@vercel/kv'
+import { getRedis } from '@/lib/redis'
 import { NextRequest, NextResponse } from 'next/server'
 
 interface CodeRecord {
@@ -20,7 +20,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
-  const allCodes = await kv.hgetall<Record<string, string>>('codes')
+  const redis = await getRedis()
+  const allCodes = await redis.hGetAll('codes')
   if (!allCodes) {
     return NextResponse.json({ total: 0, redeemed: 0, remaining: 0, redeemedCodes: [] })
   }

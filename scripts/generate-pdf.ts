@@ -12,6 +12,7 @@
  * Tweak the variables below to position the QR code on your design.
  */
 
+import './load-env'
 import * as fs from 'fs'
 import * as path from 'path'
 import { PDFDocument, rgb, LineCapStyle } from 'pdf-lib'
