@@ -82,15 +82,16 @@ const PLAYA_LAYOUT_FRAC = {
 }
 
 /** Playa banner white box → PDF placement (coupon cell, bottom-left origin). */
-function layoutPlayabowlsBox(couponW: number, couponH: number, padPts: number): { qrX: number; qrY: number; qrSize: number } {
+function layoutPlayabowlsBox(couponW: number, couponH: number): { qrX: number; qrY: number; qrSize: number } {
   const bw = PLAYA_LAYOUT_FRAC.w * couponW
   const bh = PLAYA_LAYOUT_FRAC.h * couponH
   const boxLeft = PLAYA_LAYOUT_FRAC.left * couponW
   const boxBottomFromCellBottom = (1 - PLAYA_LAYOUT_FRAC.top - PLAYA_LAYOUT_FRAC.h) * couponH
-  const qrSize = Math.min(bw, bh) - padPts * 2
+  const m = Math.min(bw, bh)
+  const qrSize = Math.max(8, Math.floor(m * PLAYA_QR_BOX_FILL))
   const qrX = boxLeft + (bw - qrSize) / 2
   const qrY = boxBottomFromCellBottom + (bh - qrSize) / 2
-  return { qrX: Math.max(0, qrX), qrY: Math.max(0, qrY), qrSize: Math.max(16, qrSize) }
+  return { qrX: Math.max(0, qrX), qrY: Math.max(0, qrY), qrSize }
 }
 
 function usePlayabowlsPixelLayout(backgroundPath: string): boolean {
@@ -98,9 +99,18 @@ function usePlayabowlsPixelLayout(backgroundPath: string): boolean {
   return b.includes('playabowl') && backgroundPath.toLowerCase().endsWith('.png')
 }
 
-/** Playa art has a skinny QR hole in the PNG; use 1×3 so coupons are wide → QR scans. Generic art stays 8-up. */
+/** Playa: coupons per Letter page (`down` ↑ = denser slips but physically smaller QR). Try 8–16 with 2 columns. */
+const PLAYA_GRID_ACROSS = 2
+const PLAYA_GRID_DOWN = 8
+
+/** How much of the white square the QR uses (0.98–0.99 fills the box; thinner margin = bigger QR). */
+const PLAYA_QR_BOX_FILL = 0.99
+
+/** Playa art has a skinny QR hole in the PNG; grid above + fill below. Generic art stays 8-up. */
 function couponGrid(backgroundPath: string | null): { across: number; down: number } {
-  if (backgroundPath && usePlayabowlsPixelLayout(backgroundPath)) return { across: 1, down: 3 }
+  if (backgroundPath && usePlayabowlsPixelLayout(backgroundPath)) {
+    return { across: PLAYA_GRID_ACROSS, down: PLAYA_GRID_DOWN }
+  }
   return { across: 2, down: 4 }
 }
 
@@ -145,7 +155,7 @@ async function main() {
     bgBytes = fs.readFileSync(resolvedBg.filePath)
     bgIsJpg = resolvedBg.isJpg
     if (usePlayabowlsPixelLayout(resolvedBg.filePath)) {
-      const padded = layoutPlayabowlsBox(couponW, couponH, 4)
+      const padded = layoutPlayabowlsBox(couponW, couponH)
       qrX = padded.qrX
       qrY = padded.qrY
       qrSize = padded.qrSize
