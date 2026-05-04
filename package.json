@@ -9,7 +9,7 @@
     "generate-codes": "tsx scripts/generate-codes.ts",
     "generate-pdf": "tsx scripts/generate-pdf.ts",
     "generate-pdf:playa": "PDF_COUPON_IMAGE=playabowls_coupon_with_qr.png PDF_OUTPUT=coupons-playa.pdf tsx scripts/generate-pdf.ts",
-    "generate-pdf:scoops": "PDF_COUPON_IMAGE=scoops_coupon.png PDF_REDEEM_PATH=/redeem/scoops PDF_OUTPUT=coupons-scoops.pdf tsx scripts/generate-pdf.ts"
+    "generate-pdf:scoops": "PDF_COUPON_IMAGE=scoops_coupon.png PDF_REDEEM_PATH=/scoops PDF_OUTPUT=coupons-scoops.pdf tsx scripts/generate-pdf.ts"
   },
   "dependencies": {
     "next": "^14.2.0",

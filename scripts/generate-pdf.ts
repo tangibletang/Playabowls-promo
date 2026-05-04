@@ -167,7 +167,7 @@ function resolveRedeemPath(backgroundPath: string | null): string {
   const raw = process.env.PDF_REDEEM_PATH?.trim()
   const fallback =
     backgroundPath && path.basename(backgroundPath).toLowerCase().includes('scoop')
-      ? '/redeem/scoops'
+      ? '/scoops'
       : '/redeem'
   const p = raw || fallback
   return p.startsWith('/') ? p.replace(/\/$/, '') : `/${p.replace(/\/$/, '')}`

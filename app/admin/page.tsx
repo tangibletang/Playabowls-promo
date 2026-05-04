@@ -1,11 +1,17 @@
 'use client'
 
 import { useCallback, useMemo, useState, FormEvent } from 'react'
-import {
-  ADMIN_ORIGINAL_BUCKET,
-  isPlayaCampaignBucket,
-  isScoopsCampaignBucket,
-} from '@/lib/coupon-record'
+
+const ADMIN_ORIGINAL_BUCKET = '__original__'
+
+function isPlayaCampaignBucket(bucket: string): boolean {
+  return bucket === ADMIN_ORIGINAL_BUCKET
+}
+
+function isScoopsCampaignBucket(bucket: string): boolean {
+  const s = bucket.trim().toLowerCase()
+  return s === 'scoops' || s.startsWith('scoops-')
+}
 
 interface RedeemedCode {
   code: string
