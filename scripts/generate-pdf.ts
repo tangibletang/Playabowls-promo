@@ -49,9 +49,9 @@ function resolveCouponBackgroundPath(): { filePath: string; isJpg: boolean } | n
  */
 const PLAYABOWLS_PIXEL_BOX = { left: 88, top: 418, w: 100, h: 100 }
 
-/** Playa coupons per Letter page (`down` ↑ = denser slips but smaller QR). */
+/** Playa grid: 2 cols × `DOWN` rows — lower `DOWN` ⇒ taller slips ⇒ bigger art & QR + less gutter (banner ~16:9). Try 5–8. */
 const PLAYA_GRID_ACROSS = 2
-const PLAYA_GRID_DOWN = 8
+const PLAYA_GRID_DOWN = 5
 
 /** Max fraction of the white square used for QR; keep ≤0.985 so QR stays inside outlined box. */
 const PLAYA_QR_BOX_FILL = 0.985
@@ -72,7 +72,9 @@ const CODE_TEXT_SIZE = 11
 // US Letter dimensions in points (72pt = 1 inch)
 const PAGE_W = 612
 const PAGE_H = 792
-const MARGIN = 36 // 0.5 inch margins
+const MARGIN = 36 // 0.5 inch margins — generic layouts
+/** Slightly tighter for Playa slips so coupons use more of Letter (still printable). */
+const PLAYA_MARGIN = 28
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://your-project.vercel.app').replace(/\/$/, '')
 const OUTPUT_PDF = path.join(process.cwd(), 'coupons.pdf')
@@ -146,8 +148,10 @@ async function main() {
   const resolvedBg = resolveCouponBackgroundPath()
   const bgPathForGrid = resolvedBg?.filePath ?? null
   const { across: couponAcross, down: couponDown } = couponGrid(bgPathForGrid)
-  const couponW = (PAGE_W - MARGIN * 2) / couponAcross
-  const couponH = (PAGE_H - MARGIN * 2) / couponDown
+  const sheetMargin =
+    bgPathForGrid && usePlayabowlsPixelLayout(bgPathForGrid) ? PLAYA_MARGIN : MARGIN
+  const couponW = (PAGE_W - sheetMargin * 2) / couponAcross
+  const couponH = (PAGE_H - sheetMargin * 2) / couponDown
   const couponsPerPage = couponAcross * couponDown
 
   let bgBytes: Uint8Array | null = null
@@ -212,8 +216,8 @@ async function main() {
       const row = Math.floor(slot / couponAcross)
 
       // Bottom-left corner of this coupon cell
-      const cellX = MARGIN + col * couponW
-      const cellY = PAGE_H - MARGIN - (row + 1) * couponH
+      const cellX = sheetMargin + col * couponW
+      const cellY = PAGE_H - sheetMargin - (row + 1) * couponH
 
       // Draw background image (Playa art: preserve aspect ratio so the white raster square stays square)
       if (bgImage && playaLetterbox) {
@@ -270,8 +274,8 @@ async function main() {
 
     // Outer border
     page.drawRectangle({
-      x: MARGIN,
-      y: MARGIN,
+      x: sheetMargin,
+      y: sheetMargin,
       width: couponW * couponAcross,
       height: couponH * couponDown,
       borderColor: cutColor,
@@ -283,10 +287,10 @@ async function main() {
 
     // Inner vertical cut lines (between columns)
     for (let c = 1; c < couponAcross; c++) {
-      const x = MARGIN + c * couponW
+      const x = sheetMargin + c * couponW
       page.drawLine({
-        start: { x, y: MARGIN },
-        end:   { x, y: PAGE_H - MARGIN },
+        start: { x, y: sheetMargin },
+        end:   { x, y: PAGE_H - sheetMargin },
         color: cutColor,
         thickness: cutWidth,
         lineCap: LineCapStyle.Butt,
@@ -295,10 +299,10 @@ async function main() {
 
     // Inner horizontal cut lines (between rows)
     for (let r = 1; r < couponDown; r++) {
-      const y = MARGIN + r * couponH
+      const y = sheetMargin + r * couponH
       page.drawLine({
-        start: { x: MARGIN, y },
-        end:   { x: PAGE_W - MARGIN, y },
+        start: { x: sheetMargin, y },
+        end:   { x: PAGE_W - sheetMargin, y },
         color: cutColor,
         thickness: cutWidth,
         lineCap: LineCapStyle.Butt,
