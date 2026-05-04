@@ -15,8 +15,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'bad_request' }, { status: 400 })
   }
 
-  const adminPassword = process.env.ADMIN_PASSWORD
-  if (!adminPassword || password !== adminPassword) {
+  const submitted = password.trim()
+  const adminPassword = process.env.ADMIN_PASSWORD?.trim()
+  if (!adminPassword || submitted !== adminPassword) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
