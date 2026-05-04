@@ -30,6 +30,15 @@ export function assertCliCampaignSlug(raw: string, cmdLabel?: string): string {
   return c
 }
 
+export function isPlayaCampaignBucket(bucket: string): boolean {
+  return bucket === ADMIN_ORIGINAL_BUCKET
+}
+
+export function isScoopsCampaignBucket(bucket: string): boolean {
+  const s = bucket.trim().toLowerCase()
+  return s === 'scoops' || s.startsWith('scoops-')
+}
+
 /** Human-readable label for admin UI (don't expose raw sentinel keys). */
 export function formatCampaignHeading(bucket: string): string {
   if (bucket === ADMIN_ORIGINAL_BUCKET) return 'Playa Bowls · original batch'

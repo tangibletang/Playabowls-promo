@@ -1,11 +1,16 @@
 'use client'
 
-import { useCallback, useState, FormEvent } from 'react'
-import { ADMIN_ORIGINAL_BUCKET } from '@/lib/coupon-record'
+import { useCallback, useMemo, useState, FormEvent } from 'react'
+import {
+  ADMIN_ORIGINAL_BUCKET,
+  isPlayaCampaignBucket,
+  isScoopsCampaignBucket,
+} from '@/lib/coupon-record'
 
 interface RedeemedCode {
   code: string
   redeemedAt: string
+  /** Present for all rows after server update; missing older responses default to Playa legacy. */
   campaignBucket?: string
   campaignHeading?: string
 }
@@ -40,15 +45,74 @@ function fmt(iso: string) {
 }
 
 function normalizeDashboard(data: Record<string, unknown>): Stats {
+  const redeemedCodes = Array.isArray(data.redeemedCodes)
+    ? (data.redeemedCodes as RedeemedCode[]).map(row => ({
+        ...row,
+        campaignBucket: row.campaignBucket ?? ADMIN_ORIGINAL_BUCKET,
+      }))
+    : []
   return {
     total: Number(data.total ?? 0),
     redeemed: Number(data.redeemed ?? 0),
     remaining: Number(data.remaining ?? 0),
-    redeemedCodes: Array.isArray(data.redeemedCodes) ? data.redeemedCodes as RedeemedCode[] : [],
+    redeemedCodes,
     campaigns: (data.campaigns && typeof data.campaigns === 'object')
       ? data.campaigns as Record<string, CampaignTotals>
       : {},
   }
+}
+
+const VIEW_CYCLE = ['all', 'playa', 'scoops'] as const
+type CampaignSlice = (typeof VIEW_CYCLE)[number]
+
+function rowBucket(row: RedeemedCode): string {
+  return row.campaignBucket ?? ADMIN_ORIGINAL_BUCKET
+}
+
+function filterDashboard(stats: Stats, slice: CampaignSlice) {
+  if (slice === 'all') {
+    const pct = stats.total > 0 ? Math.round((stats.redeemed / stats.total) * 100) : 0
+    return {
+      label: 'All programs',
+      sub: `${stats.total.toLocaleString()} QR codes in this project · Playa + Scoops (+ any other batches)`,
+      total: stats.total,
+      redeemed: stats.redeemed,
+      remaining: stats.remaining,
+      pct,
+      redeemedCodes: stats.redeemedCodes,
+      campaignKeys: Object.keys(stats.campaigns)
+        .filter(k => stats.campaigns[k].total > 0)
+        .sort((a, b) => {
+          if (a === ADMIN_ORIGINAL_BUCKET) return -1
+          if (b === ADMIN_ORIGINAL_BUCKET) return 1
+          return a.localeCompare(b)
+        }),
+    }
+  }
+
+  const bucketMatch = slice === 'playa' ? isPlayaCampaignBucket : isScoopsCampaignBucket
+  const campaignKeys = Object.keys(stats.campaigns).filter(k => bucketMatch(k) && stats.campaigns[k].total > 0)
+
+  let total = 0
+  let redeemed = 0
+  for (const k of campaignKeys) {
+    const c = stats.campaigns[k]
+    total += c.total
+    redeemed += c.redeemed
+  }
+  const remaining = total - redeemed
+  const pct = total > 0 ? Math.round((redeemed / total) * 100) : 0
+  const redeemedCodes = stats.redeemedCodes.filter(r => bucketMatch(rowBucket(r)))
+
+  const label = slice === 'playa' ? 'Playa Bowls' : 'Scoops'
+  const sub =
+    total > 0
+      ? `${total.toLocaleString()} QR codes in this batch`
+      : slice === 'scoops'
+        ? 'No Scoops-tagged coupons in Redis yet · run generate-codes -- --campaign …'
+        : 'No legacy Playa batch in Redis yet'
+
+  return { label, sub, total, redeemed, remaining, pct, redeemedCodes, campaignKeys }
 }
 
 async function adminRequest(password: string, resetCode?: string) {
@@ -65,6 +129,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [resettingCode, setResettingCode] = useState<string | null>(null)
+  const [viewIndex, setViewIndex] = useState(0)
 
   const refreshDashboard = useCallback(async (pwd: string) => {
     const res = await adminRequest(pwd)
@@ -152,8 +217,15 @@ export default function AdminPage() {
     )
   }
 
-  const pct = stats.total > 0 ? Math.round((stats.redeemed / stats.total) * 100) : 0
-  const bucketKeys = Object.keys(stats.campaigns ?? {}).filter(k => stats.campaigns[k].total > 0)
+  const slice = VIEW_CYCLE[viewIndex % VIEW_CYCLE.length]!
+  const fd = useMemo(() => filterDashboard(stats, slice), [stats, slice])
+
+  const stepView = (delta: number) => {
+    setViewIndex(i => {
+      const n = VIEW_CYCLE.length
+      return ((i + delta) % n + n) % n
+    })
+  }
 
   return (
     <div className="admin-page">
@@ -162,12 +234,12 @@ export default function AdminPage() {
           <div>
             <h1 className="admin-title">Admin Dashboard</h1>
             <p style={{ color: '#666', fontSize: '0.85rem', marginTop: 4 }}>
-              Playa Bowls (legacy batch), Scoops, and other promo campaigns linked to one redeem site.
+              Same redeem site for Playa and Scoops — use ‹ › to focus one brand or see combined totals.
             </p>
           </div>
           <button
             type="button"
-            onClick={() => { setStats(null); setPassword(''); setError('') }}
+            onClick={() => { setStats(null); setPassword(''); setError(''); setViewIndex(0) }}
             style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', color: '#555' }}
           >
             Sign out
@@ -180,42 +252,63 @@ export default function AdminPage() {
           </p>
         )}
 
+        <div className="admin-view-switch" role="group" aria-label="Program filter">
+          <button type="button" className="admin-view-arrow" aria-label="Previous program" onClick={() => stepView(-1)}>
+            ‹
+          </button>
+          <div className="admin-view-center">
+            <div className="admin-view-label">{fd.label}</div>
+            <p className="admin-view-sub">{fd.sub}</p>
+          </div>
+          <button type="button" className="admin-view-arrow" aria-label="Next program" onClick={() => stepView(1)}>
+            ›
+          </button>
+        </div>
+
         <div className="stat-grid">
           <div className="stat-card">
-            <div className="stat-number">{stats.total}</div>
-            <div className="stat-label">Total Coupons</div>
+            <div className="stat-number">{fd.total}</div>
+            <div className="stat-label">{slice === 'all' ? 'Total QR codes' : 'QR codes (this slice)'}</div>
           </div>
           <div className="stat-card">
             <div className="stat-number" style={{ backgroundImage: 'linear-gradient(135deg, #22c55e, #16a34a)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              {stats.redeemed}
+              {fd.redeemed}
             </div>
             <div className="stat-label">Redeemed</div>
           </div>
           <div className="stat-card">
             <div className="stat-number" style={{ backgroundImage: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              {stats.remaining}
+              {fd.remaining}
             </div>
             <div className="stat-label">Remaining</div>
           </div>
           <div className="stat-card">
             <div className="stat-number" style={{ backgroundImage: 'linear-gradient(135deg, #f59e0b, #d97706)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              {pct}%
+              {fd.pct}%
             </div>
-            <div className="stat-label">Redemption Rate</div>
+            <div className="stat-label">Redemption rate</div>
           </div>
         </div>
 
-        {bucketKeys.length > 0 && (
+        {fd.campaignKeys.length > 0 && (
           <div style={{ marginBottom: 28 }}>
             <h2 className="section-title" style={{ marginBottom: 8 }}>
-              By campaign
+              {slice === 'all' ? 'By campaign' : 'Campaign breakdown'}
             </h2>
             <p style={{ color: '#888', fontSize: '0.78rem', marginBottom: 12 }}>
-              Each batch is tagged when codes are generated (e.g. <code style={{ fontSize: '0.76rem', background: '#f3f4f6', padding: '2px 5px', borderRadius: 4 }}>–campaign scoops-hanover</code>).
-              Untagged Playa codes appear as “original batch”.
+              {slice === 'all' ? (
+                <>
+                  Each batch uses the slug from <code style={{ fontSize: '0.76rem', background: '#f3f4f6', padding: '2px 5px', borderRadius: 4 }}>npm run generate-codes -- --campaign …</code>.
+                  Playa’s first batch lives in the legacy bucket unless you retagged it.
+                </>
+              ) : slice === 'playa' ? (
+                <>Showing only Playa’s legacy (“no tag”) Redis entries.</>
+              ) : (
+                <>Showing buckets whose slug is <code style={{ fontSize: '0.76rem', background: '#f3f4f6', padding: '2px 5px', borderRadius: 4 }}>scoops</code> or starts with <code style={{ fontSize: '0.76rem', background: '#f3f4f6', padding: '2px 5px', borderRadius: 4 }}>scoops-</code>.</>
+              )}
             </p>
             <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
-              {bucketKeys.map(key => (
+              {fd.campaignKeys.map(key => (
                 <div className="stat-card" key={key}>
                   <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: 8, color: '#333', lineHeight: 1.3 }}>
                     {stats.campaigns[key].heading}
@@ -234,11 +327,15 @@ export default function AdminPage() {
           </div>
         )}
 
-        {stats.redeemed > 0 ? (
+        {slice !== 'all' && fd.total === 0 ? (
+          <div style={{ textAlign: 'center', padding: '28px 0', color: '#999', fontSize: '0.9rem' }}>
+            No QR codes in Redis for this slice yet — generate a batch or switch view with the arrows.
+          </div>
+        ) : fd.redeemedCodes.length > 0 ? (
           <div>
-            <h2 className="section-title">Redeemed codes ({stats.redeemed})</h2>
+            <h2 className="section-title">Redeemed codes ({fd.redeemedCodes.length})</h2>
             <p style={{ color: '#888', fontSize: '0.78rem', marginTop: '-6px', marginBottom: 12 }}>
-              Use reset to undo a redemption if someone redeems by mistake — stats refresh immediately.
+              Reset applies in Redis · the table respects the Playa / Scoops filter above.
             </p>
             <div className="code-table admin-table-reset">
               <table>
@@ -252,7 +349,7 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {stats.redeemedCodes.map((row, i) => (
+                  {fd.redeemedCodes.map((row, i) => (
                     <tr key={`${row.code}-${row.redeemedAt}`}>
                       <td style={{ color: '#999' }}>{i + 1}</td>
                       <td>{row.code}</td>
@@ -278,6 +375,10 @@ export default function AdminPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        ) : stats.redeemed > 0 ? (
+          <div style={{ textAlign: 'center', padding: '32px 0', color: '#999' }}>
+            No redemptions in this slice · other campaigns may still have redeemed codes (switch view).
           </div>
         ) : (
           <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
