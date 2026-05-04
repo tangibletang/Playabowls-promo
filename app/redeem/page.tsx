@@ -11,6 +11,28 @@ type Status =
   | { state: 'confirming' }
   | { state: 'success'; redeemedAt: string }
 
+type RedeemBrand = {
+  brandName: string
+  icon: string
+  applyTitle: string
+  successLine: string
+}
+
+const DEFAULT_BRAND: RedeemBrand = {
+  brandName: 'Playa Bowls',
+  icon: '🍓',
+  applyTitle: 'Apply $2 off your order at Playa Bowls?',
+  successLine: 'One-time use · Playa Bowls',
+}
+
+type RedeemResponse = {
+  error?: string
+  redeemed?: boolean
+  redeemedAt?: string
+  success?: boolean
+  brand?: RedeemBrand
+}
+
 function fmt(date: Date) {
   return date.toLocaleString('en-US', {
     weekday: 'short',
@@ -30,6 +52,7 @@ function RedeemContent() {
 
   const [status, setStatus] = useState<Status>({ state: 'loading' })
   const [now, setNow] = useState(new Date())
+  const [brand, setBrand] = useState<RedeemBrand>(DEFAULT_BRAND)
 
   // Fetch initial code status
   useEffect(() => {
@@ -39,7 +62,8 @@ function RedeemContent() {
     }
     fetch(`/api/redeem?code=${encodeURIComponent(code)}`)
       .then(r => r.json())
-      .then((data: { error?: string; redeemed?: boolean; redeemedAt?: string }) => {
+      .then((data: RedeemResponse) => {
+        setBrand(data.brand ?? DEFAULT_BRAND)
         if (data.error === 'invalid') {
           setStatus({ state: 'invalid' })
         } else if (data.redeemed && data.redeemedAt) {
@@ -71,7 +95,9 @@ function RedeemContent() {
         success?: boolean
         redeemedAt?: string
         error?: string
+        brand?: RedeemBrand
       }
+      if (data.brand) setBrand(data.brand)
       if (data.success && data.redeemedAt) {
         setNow(new Date())
         setStatus({ state: 'success', redeemedAt: data.redeemedAt })
@@ -155,7 +181,7 @@ function RedeemContent() {
           <div className="amount">$2 off</div>
 
           <div className="cashier-banner">
-            One-time use · Playa Bowls
+            {brand.successLine}
           </div>
 
           <div className="timestamp-box">
@@ -178,8 +204,8 @@ function RedeemContent() {
   return (
     <main className="page">
       <div className="card">
-        <div className="icon-wrap icon-warning">🍓</div>
-        <h1 className="headline">Apply $2 off your order at Playa Bowls?</h1>
+        <div className="icon-wrap icon-warning">{brand.icon}</div>
+        <h1 className="headline">{brand.applyTitle}</h1>
         <p className="subtext">
           Present this confirmation screen to your cashier.
         </p>

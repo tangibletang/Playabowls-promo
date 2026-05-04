@@ -1,6 +1,18 @@
-import { CouponRecordPersisted } from '@/lib/coupon-record'
+import {
+  CouponRecordPersisted,
+  campaignBucket,
+  redeemBrandForRecord,
+} from '@/lib/coupon-record'
 import { getRedis } from '@/lib/redis'
 import { NextRequest, NextResponse } from 'next/server'
+
+function publicRecord(record: CouponRecordPersisted) {
+  return {
+    ...record,
+    campaignBucket: campaignBucket(record),
+    brand: redeemBrandForRecord(record),
+  }
+}
 
 // GET /api/redeem?code=XYZ — check status without consuming
 export async function GET(req: NextRequest) {
@@ -16,7 +28,7 @@ export async function GET(req: NextRequest) {
   }
 
   const record: CouponRecordPersisted = typeof raw === 'string' ? JSON.parse(raw) : raw
-  return NextResponse.json(record)
+  return NextResponse.json(publicRecord(record))
 }
 
 // POST /api/redeem — consume a valid code (idempotent if race condition)
@@ -43,7 +55,12 @@ export async function POST(req: NextRequest) {
 
   if (record.redeemed) {
     return NextResponse.json(
-      { error: 'already_redeemed', redeemedAt: record.redeemedAt },
+      {
+        error: 'already_redeemed',
+        redeemedAt: record.redeemedAt,
+        campaignBucket: campaignBucket(record),
+        brand: redeemBrandForRecord(record),
+      },
       { status: 409 }
     )
   }
@@ -52,5 +69,10 @@ export async function POST(req: NextRequest) {
   const updated: CouponRecordPersisted = { ...record, redeemed: true, redeemedAt }
   await redis.hSet('codes', code, JSON.stringify(updated))
 
-  return NextResponse.json({ success: true, redeemedAt })
+  return NextResponse.json({
+    success: true,
+    redeemedAt,
+    campaignBucket: campaignBucket(updated),
+    brand: redeemBrandForRecord(updated),
+  })
 }

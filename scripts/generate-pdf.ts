@@ -163,9 +163,24 @@ function resolveCsvPath(): string {
   return path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw)
 }
 
-function resolveOutputPdfPath(): string {
+function resolveRedeemPath(backgroundPath: string | null): string {
+  const raw = process.env.PDF_REDEEM_PATH?.trim()
+  const fallback =
+    backgroundPath && path.basename(backgroundPath).toLowerCase().includes('scoop')
+      ? '/redeem/scoops'
+      : '/redeem'
+  const p = raw || fallback
+  return p.startsWith('/') ? p.replace(/\/$/, '') : `/${p.replace(/\/$/, '')}`
+}
+
+function resolveOutputPdfPath(backgroundPath: string | null): string {
   const raw = process.env.PDF_OUTPUT?.trim()
-  if (!raw) return path.join(process.cwd(), 'coupons.pdf')
+  if (!raw) {
+    const bn = backgroundPath ? path.basename(backgroundPath).toLowerCase() : ''
+    if (bn.includes('scoop')) return path.join(process.cwd(), 'coupons-scoops.pdf')
+    if (bn.includes('playabowl')) return path.join(process.cwd(), 'coupons-playa.pdf')
+    return path.join(process.cwd(), 'coupons.pdf')
+  }
   return path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw)
 }
 
@@ -232,15 +247,42 @@ async function qrPngBuffer(url: string): Promise<Buffer> {
   return Buffer.from(dataUrl.split(',')[1], 'base64')
 }
 
-function readCodes(csvPath: string): string[] {
+type CsvCodeRow = {
+  code: string
+  campaign?: string
+}
+
+function readCodeRows(csvPath: string): CsvCodeRow[] {
   if (!fs.existsSync(csvPath)) {
     console.error(`❌  CSV missing at ${csvPath}`)
     console.error(`    npm run generate-codes -- --campaign <slug>`)
     process.exit(1)
   }
   const lines = fs.readFileSync(csvPath, 'utf8').trim().split('\n')
-  // Skip header row, extract first column
-  return lines.slice(1).map(l => l.split(',')[0].trim()).filter(Boolean)
+  const header = (lines[0] ?? '').split(',').map(h => h.trim().toLowerCase())
+  const campaignIdx = header.indexOf('campaign')
+
+  return lines.slice(1).map(line => {
+    const cols = line.split(',').map(c => c.trim())
+    return {
+      code: (cols[0] ?? '').trim(),
+      campaign: campaignIdx >= 0 ? cols[campaignIdx]?.trim().toLowerCase() : undefined,
+    }
+  }).filter(row => row.code)
+}
+
+function assertCsvMatchesArtwork(rows: CsvCodeRow[], backgroundPath: string | null, csvPath: string): void {
+  const isScoops = !!backgroundPath && path.basename(backgroundPath).toLowerCase().includes('scoop')
+  if (!isScoops) return
+
+  const bad = rows.find(row => !(row.campaign === 'scoops' || row.campaign?.startsWith('scoops-')))
+  if (!bad) return
+
+  console.error(`❌  Refusing to print Scoops art from non-Scoops CSV: ${csvPath}`)
+  console.error('    Generate Scoops codes first, for example:')
+  console.error('    npm run generate-codes -- --campaign scoops-hanover')
+  console.error('    PDF_CODES_CSV=./codes-scoops-hanover.csv npm run generate-pdf:scoops')
+  process.exit(1)
 }
 
 async function main() {
@@ -277,8 +319,12 @@ async function main() {
   }
 
   const csvPath = resolveCsvPath()
-  const codes = readCodes(csvPath)
+  const codeRows = readCodeRows(csvPath)
+  assertCsvMatchesArtwork(codeRows, bgPathForGrid, csvPath)
+  const codes = codeRows.map(row => row.code)
+  const redeemPath = resolveRedeemPath(bgPathForGrid)
   console.log(`Found ${codes.length} codes in ${csvPath}`)
+  console.log(`QR URLs use path: ${redeemPath}`)
 
   const pdfDoc = await PDFDocument.create()
   pdfDoc.setTitle('Promotional coupons')
@@ -351,7 +397,7 @@ async function main() {
       }
 
       // Generate and embed QR code
-      const url = `${SITE_URL}/redeem?code=${code}`
+      const url = `${SITE_URL}${redeemPath}?code=${code}`
       const qrBuf = await qrPngBuffer(url)
       const qrImg = await pdfDoc.embedPng(qrBuf)
 
@@ -420,7 +466,7 @@ async function main() {
   }
 
   const pdfBytes = await pdfDoc.save()
-  const outPdf = resolveOutputPdfPath()
+  const outPdf = resolveOutputPdfPath(bgPathForGrid)
   fs.writeFileSync(outPdf, pdfBytes)
   console.log(`\n✅  ${path.basename(outPdf)} written (${outPdf}) — ${(pdfBytes.length / 1024 / 1024).toFixed(1)} MB`)
   console.log(`    ${codes.length} coupons across ${totalPages} pages`)

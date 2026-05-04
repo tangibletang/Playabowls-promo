@@ -39,6 +39,35 @@ export function isScoopsCampaignBucket(bucket: string): boolean {
   return s === 'scoops' || s.startsWith('scoops-')
 }
 
+export type RedeemBrand = {
+  brandName: string
+  icon: string
+  applyTitle: string
+  successLine: string
+}
+
+export function redeemBrandForBucket(bucket: string): RedeemBrand {
+  if (isScoopsCampaignBucket(bucket)) {
+    return {
+      brandName: 'Scoops',
+      icon: '🍦',
+      applyTitle: 'Apply $2 off your order at Scoops?',
+      successLine: 'One-time use · Scoops',
+    }
+  }
+
+  return {
+    brandName: 'Playa Bowls',
+    icon: '🍓',
+    applyTitle: 'Apply $2 off your order at Playa Bowls?',
+    successLine: 'One-time use · Playa Bowls',
+  }
+}
+
+export function redeemBrandForRecord(record: CouponRecordPersisted): RedeemBrand {
+  return redeemBrandForBucket(campaignBucket(record))
+}
+
 /** Human-readable label for admin UI (don't expose raw sentinel keys). */
 export function formatCampaignHeading(bucket: string): string {
   if (bucket === ADMIN_ORIGINAL_BUCKET) return 'Playa Bowls · original batch'
