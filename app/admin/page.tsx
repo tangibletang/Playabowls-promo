@@ -36,6 +36,14 @@ interface Stats {
   campaigns: Record<string, CampaignTotals>
 }
 
+const EMPTY_STATS: Stats = {
+  total: 0,
+  redeemed: 0,
+  remaining: 0,
+  redeemedCodes: [],
+  campaigns: {},
+}
+
 type ApiFail = 'unauthorized' | 'bad_request' | 'invalid_code' | 'unknown_code' | 'not_redeemed' | string
 
 function campaignSlugFootnote(bucketKey: string): string {
@@ -147,6 +155,9 @@ export default function AdminPage() {
     return { ok: true as const, stats: normalizeDashboard(data) }
   }, [])
 
+  const slice = VIEW_CYCLE[viewIndex % VIEW_CYCLE.length]!
+  const fd = useMemo(() => filterDashboard(stats ?? EMPTY_STATS, slice), [stats, slice])
+
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault()
     setLoading(true)
@@ -222,9 +233,6 @@ export default function AdminPage() {
       </main>
     )
   }
-
-  const slice = VIEW_CYCLE[viewIndex % VIEW_CYCLE.length]!
-  const fd = useMemo(() => filterDashboard(stats, slice), [stats, slice])
 
   const stepView = (delta: number) => {
     setViewIndex(i => {
