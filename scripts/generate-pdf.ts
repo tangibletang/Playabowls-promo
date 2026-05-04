@@ -49,6 +49,13 @@ function resolveCouponBackgroundPath(): { filePath: string; isJpg: boolean } | n
  */
 const PLAYABOWLS_PIXEL_BOX = { left: 88, top: 418, w: 100, h: 100 }
 
+/** Playa coupons per Letter page (`down` ↑ = denser slips but smaller QR). */
+const PLAYA_GRID_ACROSS = 2
+const PLAYA_GRID_DOWN = 8
+
+/** Max fraction of the white square used for QR; keep ≤0.985 so QR stays inside outlined box. */
+const PLAYA_QR_BOX_FILL = 0.985
+
 // Fallback layout when artwork is generic or unknown (adjust by hand if needed):
 const FALLBACK_QR_X = 176
 const FALLBACK_QR_Y = 20
@@ -71,27 +78,34 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://your-project.verc
 const OUTPUT_PDF = path.join(process.cwd(), 'coupons.pdf')
 const CSV_INPUT = path.join(process.cwd(), 'codes.csv')
 
-const PLAYA_REF_W = 1024
-const PLAYA_REF_H = 572
-
-const PLAYA_LAYOUT_FRAC = {
-  left: PLAYABOWLS_PIXEL_BOX.left / PLAYA_REF_W,
-  top: PLAYABOWLS_PIXEL_BOX.top / PLAYA_REF_H,
-  w: PLAYABOWLS_PIXEL_BOX.w / PLAYA_REF_W,
-  h: PLAYABOWLS_PIXEL_BOX.h / PLAYA_REF_H,
+/** Scale PNG/JPG uniformly to fit coupon cell — keeps raster squares square (letterboxed). */
+function uniformContainFit(imgW: number, imgH: number, cellW: number, cellH: number) {
+  const s = Math.min(cellW / imgW, cellH / imgH)
+  const dw = imgW * s
+  const dh = imgH * s
+  const dx = (cellW - dw) / 2
+  const dy = (cellH - dh) / 2
+  return { scale: s, dx, dy, dw, dh }
 }
 
-/** Playa banner white box → PDF placement (coupon cell, bottom-left origin). */
-function layoutPlayabowlsBox(couponW: number, couponH: number): { qrX: number; qrY: number; qrSize: number } {
-  const bw = PLAYA_LAYOUT_FRAC.w * couponW
-  const bh = PLAYA_LAYOUT_FRAC.h * couponH
-  const boxLeft = PLAYA_LAYOUT_FRAC.left * couponW
-  const boxBottomFromCellBottom = (1 - PLAYA_LAYOUT_FRAC.top - PLAYA_LAYOUT_FRAC.h) * couponH
-  const m = Math.min(bw, bh)
-  const qrSize = Math.max(8, Math.floor(m * PLAYA_QR_BOX_FILL))
-  const qrX = boxLeft + (bw - qrSize) / 2
-  const qrY = boxBottomFromCellBottom + (bh - qrSize) / 2
-  return { qrX: Math.max(0, qrX), qrY: Math.max(0, qrY), qrSize }
+/**
+ * After uniform fit the 100×100 white patch stays geometrically square; QR centered inside never exceeds it.
+ */
+function layoutPlayabowlsQrInCell(imgW: number, imgH: number, couponW: number, couponH: number) {
+  const u = uniformContainFit(imgW, imgH, couponW, couponH)
+  const { dx, dy, dw, dh, scale: s } = u
+
+  const sidePdf = PLAYABOWLS_PIXEL_BOX.w * s
+  const fromBottomPx = imgH - PLAYABOWLS_PIXEL_BOX.top - PLAYABOWLS_PIXEL_BOX.h
+
+  const boxLeftInCell = dx + (PLAYABOWLS_PIXEL_BOX.left / imgW) * dw
+  const boxBottomInCell = dy + (fromBottomPx / imgH) * dh
+
+  const qrSize = Math.max(8, Math.min(sidePdf - 2, Math.floor(sidePdf * PLAYA_QR_BOX_FILL)))
+  const qrX = boxLeftInCell + (sidePdf - qrSize) / 2
+  const qrY = boxBottomInCell + (sidePdf - qrSize) / 2
+
+  return { ...u, qrX, qrY, qrSize }
 }
 
 function usePlayabowlsPixelLayout(backgroundPath: string): boolean {
@@ -99,14 +113,7 @@ function usePlayabowlsPixelLayout(backgroundPath: string): boolean {
   return b.includes('playabowl') && backgroundPath.toLowerCase().endsWith('.png')
 }
 
-/** Playa: coupons per Letter page (`down` ↑ = denser slips but physically smaller QR). Try 8–16 with 2 columns. */
-const PLAYA_GRID_ACROSS = 2
-const PLAYA_GRID_DOWN = 8
-
-/** How much of the white square the QR uses (0.98–0.99 fills the box; thinner margin = bigger QR). */
-const PLAYA_QR_BOX_FILL = 0.99
-
-/** Playa art has a skinny QR hole in the PNG; grid above + fill below. Generic art stays 8-up. */
+/** Playa art has a skinny QR hole in the PNG; grid above + uniform scale. Generic art stays 8-up. */
 function couponGrid(backgroundPath: string | null): { across: number; down: number } {
   if (backgroundPath && usePlayabowlsPixelLayout(backgroundPath)) {
     return { across: PLAYA_GRID_ACROSS, down: PLAYA_GRID_DOWN }
@@ -154,14 +161,7 @@ async function main() {
   if (resolvedBg) {
     bgBytes = fs.readFileSync(resolvedBg.filePath)
     bgIsJpg = resolvedBg.isJpg
-    if (usePlayabowlsPixelLayout(resolvedBg.filePath)) {
-      const padded = layoutPlayabowlsBox(couponW, couponH)
-      qrX = padded.qrX
-      qrY = padded.qrY
-      qrSize = padded.qrSize
-      showCodeOverlay = false
-      console.log(`📐  Using Playa QR box (${path.basename(resolvedBg.filePath)} → ~${qrSize.toFixed(0)} pt QR, centered)`)
-    } else {
+    if (!usePlayabowlsPixelLayout(resolvedBg.filePath)) {
       console.log(`📐  Using fallback QR position for ${path.basename(resolvedBg.filePath)}`)
     }
   } else {
@@ -185,6 +185,20 @@ async function main() {
       : await pdfDoc.embedPng(bgBytes)
   }
 
+  let playaLetterbox: ReturnType<typeof layoutPlayabowlsQrInCell> | undefined
+  if (resolvedBg?.filePath && bgImage && usePlayabowlsPixelLayout(resolvedBg.filePath)) {
+    const iw = bgImage.width
+    const ih = bgImage.height
+    playaLetterbox = layoutPlayabowlsQrInCell(iw, ih, couponW, couponH)
+    qrX = playaLetterbox.qrX
+    qrY = playaLetterbox.qrY
+    qrSize = playaLetterbox.qrSize
+    showCodeOverlay = false
+    console.log(
+      `📐  Playa: uniform-fit ${iw}×${ih}px banner (letterboxed); white patch stays square; QR ~${qrSize.toFixed(0)} pt (inside)`
+    )
+  }
+
   const totalPages = Math.ceil(codes.length / couponsPerPage)
   console.log(`Generating ${codes.length} coupons across ${totalPages} pages…`)
 
@@ -201,8 +215,15 @@ async function main() {
       const cellX = MARGIN + col * couponW
       const cellY = PAGE_H - MARGIN - (row + 1) * couponH
 
-      // Draw background image
-      if (bgImage) {
+      // Draw background image (Playa art: preserve aspect ratio so the white raster square stays square)
+      if (bgImage && playaLetterbox) {
+        page.drawImage(bgImage, {
+          x: cellX + playaLetterbox.dx,
+          y: cellY + playaLetterbox.dy,
+          width: playaLetterbox.dw,
+          height: playaLetterbox.dh,
+        })
+      } else if (bgImage) {
         page.drawImage(bgImage, {
           x: cellX,
           y: cellY,
