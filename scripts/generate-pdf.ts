@@ -4,12 +4,16 @@
  * Run with:  npm run generate-pdf
  *
  * What it does:
- *   Reads codes.csv, generates a QR code for each redemption URL,
- *   and produces a print-ready PDF with 8 coupons per US Letter page,
- *   using your coupon design (coupon-bg.png/jpg) as the background.
+ *   Reads a CSV (defaults to codes.csv unless PDF_CODES_CSV is set — one column codes + header),
+ *   and produces a print-ready PDF: 2×5 coupons per Letter when using Playa/Scoops banner calibration,
+ *   or 8 per page for generic stretched coupon-bg layouts.
  *
- * Design: save your artwork as coupon-bg.png (or .jpg) in the repo root —
- * leave a plain “QR + code” area; tweak QR_X/Y and CODE_TEXT_X/Y until they sit in your blank box.
+ * Design:
+ * - Save artwork as coupon-bg.(png/jpg) in the repo root, or rely on Playa’s bundled filename.
+ * - Second brand image: PDF_COUPON_IMAGE=./other_company.png puts it ahead of coupon-bg*.
+ * - Calibrate the raster “white QR hole”: built-ins for playabowls_* and scoops_coupon.png, or pass
+ *   PDF_PIXEL_BOX=left,top,width,height in image pixel coordinates from the raster’s top‑left corner.
+ * - Optional: PDF_QR_BOX_FILL in (0.5, 0.999] (fraction of calibrated hole used by QR; defaults per art).
  */
 
 import './load-env'
@@ -22,39 +26,116 @@ import QRCode from 'qrcode'
 //  CONFIGURE THESE — tweak until the QR lands where you want it
 // ══════════════════════════════════════════════════════════════════
 
-// Path hints — first existing file wins (coupon-bg*, then your Playa design name)
+// Paths — PDF_COUPON_IMAGE (if set & exists) wins, then bundled fallbacks below.
 function resolveCouponBackgroundPath(): { filePath: string; isJpg: boolean } | null {
   const root = process.cwd()
-  const names = [
+  const ordered: string[] = []
+  const fromEnv = process.env.PDF_COUPON_IMAGE?.trim()
+  if (fromEnv) {
+    ordered.push(path.isAbsolute(fromEnv) ? fromEnv : path.join(root, fromEnv))
+  }
+  ordered.push(
     'coupon-bg.png',
     'coupon-bg.jpg',
     'coupon-bg.jpeg',
     'playabowls_coupon_with_qr.png',
     'playabowls_coupon_with_qr.jpg',
     'playabowls_coupon_with_qr.jpeg',
-  ]
-  for (const n of names) {
-    const p = path.join(root, n)
-    if (fs.existsSync(p)) {
-      return { filePath: p, isJpg: /\.(jpe?g)$/i.test(p) }
-    }
+    /** When both Playa + Scoops assets live in repo, Playa stays default; set PDF_COUPON_IMAGE=scoops_coupon.png for Scoops PDFs. */
+    'scoops_coupon.png',
+    'scoops_coupon.jpg',
+    'scoops_coupon.jpeg',
+  )
+
+  const seen = new Set<string>()
+  for (let p of ordered) {
+    p = path.normalize(p)
+    if (seen.has(p)) continue
+    seen.add(p)
+    if (fs.existsSync(p)) return { filePath: p, isJpg: /\.(jpe?g)$/i.test(p) }
   }
   return null
 }
 
-/**
- * Calibrated pixel box for playabowls_coupon_with_qr.png (~1024-wide design):
- * white square above "SCAN & SHOW WAITER".
- * Tweaked manually from layout; rerun `npm run generate-pdf` if you export a different crop/size.
- */
-const PLAYABOWLS_PIXEL_BOX = { left: 88, top: 418, w: 100, h: 100 }
+type RasterHoleBox = { left: number; top: number; w: number; h: number }
 
-/** Playa grid: 2 cols × `DOWN` rows — lower `DOWN` ⇒ taller slips ⇒ bigger art & QR + less gutter (banner ~16:9). Try 5–8. */
+/**
+ * Calibrated pixel hole for playabowls_coupon_with_qr.png (~1024-wide design):
+ * white square above “SCAN & SHOW…” on that layout.
+ */
+const PLAYABOWLS_PIXEL_BOX: RasterHoleBox = { left: 88, top: 418, w: 100, h: 100 }
+
+/**
+ * scoops_coupon.png (1024×565): inner white matte inside the gold picture-frame on the right (the area you
+ * “paste into”, including placeholder finder-corner graphics). Raster top-left corner of that square + size.
+ */
+const SCOOPS_PIXEL_BOX: RasterHoleBox = { left: 842, top: 226, w: 104, h: 104 }
+
+/** Playa / wide-banner grid: taller slips ⇒ bigger QR. */
 const PLAYA_GRID_ACROSS = 2
 const PLAYA_GRID_DOWN = 5
 
-/** Max fraction of the white square used for QR; keep ≤0.985 so QR stays inside outlined box. */
+/** Fraction of calibrated hole filled by QR (PNG quiet margin stays inside this box). */
 const PLAYA_QR_BOX_FILL = 0.985
+const SCOOPS_QR_BOX_FILL = 0.99
+
+/** Page margin when using uniform-fit banner layouts (pts). Playa kept at prior printable value; Scoops tightened a touch. */
+const PLAYA_SHEET_MARGIN_PT = 28
+const SCOOPS_SHEET_MARGIN_PT = 22
+
+function parsePdfPixelBoxFromEnv(): RasterHoleBox | null {
+  const raw = process.env.PDF_PIXEL_BOX?.trim()
+  if (!raw) return null
+  const nums = raw.split(',').map(s => Number.parseFloat(s.trim()))
+  if (nums.length !== 4 || nums.some(n => !Number.isFinite(n) || n <= 0)) {
+    console.error(
+      '❌  PDF_PIXEL_BOX must be exactly four comma-separated positives: left,top,width,height (pixels from top‑left).'
+    )
+    process.exit(1)
+  }
+  return { left: nums[0], top: nums[1], w: nums[2], h: nums[3] }
+}
+
+/** Env wins; otherwise built-ins for scoops / Playa PNG patches; stretch QR fallback if uncalibrated. */
+function effectiveRasterQrHole(backgroundPath: string | null): RasterHoleBox | null {
+  const fromEnv = parsePdfPixelBoxFromEnv()
+  if (fromEnv) return fromEnv
+  if (!backgroundPath) return null
+  const bn = path.basename(backgroundPath).toLowerCase()
+  const png = backgroundPath.toLowerCase().endsWith('.png')
+  if (png && bn.includes('scoop')) return SCOOPS_PIXEL_BOX
+  if (png && bn.includes('playabowl')) return PLAYABOWLS_PIXEL_BOX
+  return null
+}
+
+function parseQrBoxFillFromEnv(): number | null {
+  const raw = process.env.PDF_QR_BOX_FILL?.trim()
+  if (!raw) return null
+  const n = Number.parseFloat(raw)
+  if (!Number.isFinite(n) || n <= 0.5 || n > 0.999) {
+    console.error('❌  PDF_QR_BOX_FILL must be a number in (0.5, 0.999], e.g. 0.992')
+    process.exit(1)
+  }
+  return n
+}
+
+function resolveQrBoxFill(backgroundPath: string | null): number {
+  const fromEnv = parseQrBoxFillFromEnv()
+  if (fromEnv !== null) return fromEnv
+  if (!backgroundPath) return PLAYA_QR_BOX_FILL
+  const bn = path.basename(backgroundPath).toLowerCase()
+  if (bn.includes('scoop')) return SCOOPS_QR_BOX_FILL
+  if (bn.includes('playabowl')) return PLAYA_QR_BOX_FILL
+  return 0.97
+}
+
+function sheetMarginPt(uniform: boolean, backgroundPath: string | null): number {
+  if (!uniform) return MARGIN
+  if (!backgroundPath) return PLAYA_SHEET_MARGIN_PT
+  const bn = path.basename(backgroundPath).toLowerCase()
+  if (bn.includes('scoop')) return SCOOPS_SHEET_MARGIN_PT
+  return PLAYA_SHEET_MARGIN_PT
+}
 
 // Fallback layout when artwork is generic or unknown (adjust by hand if needed):
 const FALLBACK_QR_X = 176
@@ -73,12 +154,20 @@ const CODE_TEXT_SIZE = 11
 const PAGE_W = 612
 const PAGE_H = 792
 const MARGIN = 36 // 0.5 inch margins — generic layouts
-/** Slightly tighter for Playa slips so coupons use more of Letter (still printable). */
-const PLAYA_MARGIN = 28
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://your-project.vercel.app').replace(/\/$/, '')
-const OUTPUT_PDF = path.join(process.cwd(), 'coupons.pdf')
-const CSV_INPUT = path.join(process.cwd(), 'codes.csv')
+
+function resolveCsvPath(): string {
+  const raw = process.env.PDF_CODES_CSV?.trim()
+  if (!raw) return path.join(process.cwd(), 'codes.csv')
+  return path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw)
+}
+
+function resolveOutputPdfPath(): string {
+  const raw = process.env.PDF_OUTPUT?.trim()
+  if (!raw) return path.join(process.cwd(), 'coupons.pdf')
+  return path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw)
+}
 
 /** Scale PNG/JPG uniformly to fit coupon cell — keeps raster squares square (letterboxed). */
 function uniformContainFit(imgW: number, imgH: number, cellW: number, cellH: number) {
@@ -91,36 +180,46 @@ function uniformContainFit(imgW: number, imgH: number, cellW: number, cellH: num
 }
 
 /**
- * After uniform fit the 100×100 white patch stays geometrically square; QR centered inside never exceeds it.
+ * After uniform fit the calibrated patch stays geometrically proportional; QR stays centered inside hole.
  */
-function layoutPlayabowlsQrInCell(imgW: number, imgH: number, couponW: number, couponH: number) {
+function layoutQrInUniformCell(
+  imgW: number,
+  imgH: number,
+  hole: RasterHoleBox,
+  couponW: number,
+  couponH: number,
+  qrHoleFillFrac: number
+) {
   const u = uniformContainFit(imgW, imgH, couponW, couponH)
   const { dx, dy, dw, dh, scale: s } = u
 
-  const sidePdf = PLAYABOWLS_PIXEL_BOX.w * s
-  const fromBottomPx = imgH - PLAYABOWLS_PIXEL_BOX.top - PLAYABOWLS_PIXEL_BOX.h
+  const sidePdf = hole.w * s
+  const fromBottomPx = imgH - hole.top - hole.h
 
-  const boxLeftInCell = dx + (PLAYABOWLS_PIXEL_BOX.left / imgW) * dw
+  const boxLeftInCell = dx + (hole.left / imgW) * dw
   const boxBottomInCell = dy + (fromBottomPx / imgH) * dh
 
-  const qrSize = Math.max(8, Math.min(sidePdf - 2, Math.floor(sidePdf * PLAYA_QR_BOX_FILL)))
+  const qrSize = Math.max(
+    8,
+    Math.min(sidePdf - 2, Math.floor(sidePdf * Math.min(qrHoleFillFrac, 0.999)))
+  )
   const qrX = boxLeftInCell + (sidePdf - qrSize) / 2
   const qrY = boxBottomInCell + (sidePdf - qrSize) / 2
 
   return { ...u, qrX, qrY, qrSize }
 }
 
-function usePlayabowlsPixelLayout(backgroundPath: string): boolean {
-  const b = path.basename(backgroundPath).toLowerCase()
-  return b.includes('playabowl') && backgroundPath.toLowerCase().endsWith('.png')
-}
+/** Playa / calibrated hole → uniform‑scale grid; generic stretch layouts stay denser unless you tweak env. */
+function couponGrid(uniform: boolean): { across: number; down: number } {
+  if (!uniform) return { across: 2, down: 4 }
 
-/** Playa art has a skinny QR hole in the PNG; grid above + uniform scale. Generic art stays 8-up. */
-function couponGrid(backgroundPath: string | null): { across: number; down: number } {
-  if (backgroundPath && usePlayabowlsPixelLayout(backgroundPath)) {
-    return { across: PLAYA_GRID_ACROSS, down: PLAYA_GRID_DOWN }
-  }
-  return { across: 2, down: 4 }
+  let across = PLAYA_GRID_ACROSS
+  let down = PLAYA_GRID_DOWN
+  const ae = Number(process.env.PDF_GRID_ACROSS)
+  const de = Number(process.env.PDF_GRID_DOWN)
+  if (Number.isFinite(ae) && ae > 0) across = Math.floor(ae)
+  if (Number.isFinite(de) && de > 0) down = Math.floor(de)
+  return { across, down }
 }
 
 async function qrPngBuffer(url: string): Promise<Buffer> {
@@ -135,8 +234,8 @@ async function qrPngBuffer(url: string): Promise<Buffer> {
 
 function readCodes(csvPath: string): string[] {
   if (!fs.existsSync(csvPath)) {
-    console.error(`❌  codes.csv not found at ${csvPath}`)
-    console.error('    Run  npm run generate-codes  first.')
+    console.error(`❌  CSV missing at ${csvPath}`)
+    console.error(`    npm run generate-codes -- --campaign <slug>`)
     process.exit(1)
   }
   const lines = fs.readFileSync(csvPath, 'utf8').trim().split('\n')
@@ -147,9 +246,12 @@ function readCodes(csvPath: string): string[] {
 async function main() {
   const resolvedBg = resolveCouponBackgroundPath()
   const bgPathForGrid = resolvedBg?.filePath ?? null
-  const { across: couponAcross, down: couponDown } = couponGrid(bgPathForGrid)
-  const sheetMargin =
-    bgPathForGrid && usePlayabowlsPixelLayout(bgPathForGrid) ? PLAYA_MARGIN : MARGIN
+  const rasterQrHole = effectiveRasterQrHole(bgPathForGrid)
+  const uniform = rasterQrHole !== null
+
+  const { across: couponAcross, down: couponDown } = couponGrid(uniform)
+  const sheetMargin = sheetMarginPt(uniform, bgPathForGrid)
+  const qrBoxFill = resolveQrBoxFill(bgPathForGrid)
   const couponW = (PAGE_W - sheetMargin * 2) / couponAcross
   const couponH = (PAGE_H - sheetMargin * 2) / couponDown
   const couponsPerPage = couponAcross * couponDown
@@ -165,19 +267,22 @@ async function main() {
   if (resolvedBg) {
     bgBytes = fs.readFileSync(resolvedBg.filePath)
     bgIsJpg = resolvedBg.isJpg
-    if (!usePlayabowlsPixelLayout(resolvedBg.filePath)) {
-      console.log(`📐  Using fallback QR position for ${path.basename(resolvedBg.filePath)}`)
+    if (!uniform) {
+      console.log(`📐  Stretch background + fallback QR anchors for ${path.basename(resolvedBg.filePath)}`)
     }
   } else {
-    console.warn('⚠️   No coupon art found — place coupon-bg.* or playabowls_coupon_with_qr.png in project root.')
+    console.warn(
+      '⚠️   No coupon art found — drop coupon-bg.*, scoops_coupon.png, or playabowls_coupon_with_qr.* in project root.'
+    )
   }
 
-  const codes = readCodes(CSV_INPUT)
-  console.log(`Found ${codes.length} codes in ${CSV_INPUT}`)
+  const csvPath = resolveCsvPath()
+  const codes = readCodes(csvPath)
+  console.log(`Found ${codes.length} codes in ${csvPath}`)
 
   const pdfDoc = await PDFDocument.create()
-  pdfDoc.setTitle('Playa Bowls $2 Off Coupons')
-  pdfDoc.setAuthor('Playa Bowls Promo')
+  pdfDoc.setTitle('Promotional coupons')
+  pdfDoc.setAuthor('Promo site')
 
   const codeFont = await pdfDoc.embedFont(StandardFonts.CourierBold)
 
@@ -189,17 +294,17 @@ async function main() {
       : await pdfDoc.embedPng(bgBytes)
   }
 
-  let playaLetterbox: ReturnType<typeof layoutPlayabowlsQrInCell> | undefined
-  if (resolvedBg?.filePath && bgImage && usePlayabowlsPixelLayout(resolvedBg.filePath)) {
+  let uniformLetterbox: ReturnType<typeof layoutQrInUniformCell> | undefined
+  if (resolvedBg?.filePath && bgImage && uniform && rasterQrHole) {
     const iw = bgImage.width
     const ih = bgImage.height
-    playaLetterbox = layoutPlayabowlsQrInCell(iw, ih, couponW, couponH)
-    qrX = playaLetterbox.qrX
-    qrY = playaLetterbox.qrY
-    qrSize = playaLetterbox.qrSize
+    uniformLetterbox = layoutQrInUniformCell(iw, ih, rasterQrHole, couponW, couponH, qrBoxFill)
+    qrX = uniformLetterbox.qrX
+    qrY = uniformLetterbox.qrY
+    qrSize = uniformLetterbox.qrSize
     showCodeOverlay = false
     console.log(
-      `📐  Playa: uniform-fit ${iw}×${ih}px banner (letterboxed); white patch stays square; QR ~${qrSize.toFixed(0)} pt (inside)`
+      `📐  Uniform-fit ${iw}×${ih}px art (letterboxed); QR hole @ ${rasterQrHole.left},${rasterQrHole.top} ${rasterQrHole.w}×${rasterQrHole.h}px — QR ~${qrSize.toFixed(0)} pt`
     )
   }
 
@@ -220,12 +325,12 @@ async function main() {
       const cellY = PAGE_H - sheetMargin - (row + 1) * couponH
 
       // Draw background image (Playa art: preserve aspect ratio so the white raster square stays square)
-      if (bgImage && playaLetterbox) {
+      if (bgImage && uniformLetterbox) {
         page.drawImage(bgImage, {
-          x: cellX + playaLetterbox.dx,
-          y: cellY + playaLetterbox.dy,
-          width: playaLetterbox.dw,
-          height: playaLetterbox.dh,
+          x: cellX + uniformLetterbox.dx,
+          y: cellY + uniformLetterbox.dy,
+          width: uniformLetterbox.dw,
+          height: uniformLetterbox.dh,
         })
       } else if (bgImage) {
         page.drawImage(bgImage, {
@@ -315,8 +420,9 @@ async function main() {
   }
 
   const pdfBytes = await pdfDoc.save()
-  fs.writeFileSync(OUTPUT_PDF, pdfBytes)
-  console.log(`\n✅  coupons.pdf written — ${(pdfBytes.length / 1024 / 1024).toFixed(1)} MB`)
+  const outPdf = resolveOutputPdfPath()
+  fs.writeFileSync(outPdf, pdfBytes)
+  console.log(`\n✅  ${path.basename(outPdf)} written (${outPdf}) — ${(pdfBytes.length / 1024 / 1024).toFixed(1)} MB`)
   console.log(`    ${codes.length} coupons across ${totalPages} pages`)
   console.log(`    Coupon size: ${(couponW / 72).toFixed(2)}" × ${(couponH / 72).toFixed(2)}" (${couponAcross}×${couponDown}/page)`)
   console.log(`    QR position: ${qrX.toFixed(1)}pt from left, ${qrY.toFixed(1)}pt from bottom, ${qrSize.toFixed(1)}pt square`)

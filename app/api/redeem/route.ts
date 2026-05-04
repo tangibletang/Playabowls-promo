@@ -1,10 +1,6 @@
+import { CouponRecordPersisted } from '@/lib/coupon-record'
 import { getRedis } from '@/lib/redis'
 import { NextRequest, NextResponse } from 'next/server'
-
-interface CodeRecord {
-  redeemed: boolean
-  redeemedAt?: string
-}
 
 // GET /api/redeem?code=XYZ — check status without consuming
 export async function GET(req: NextRequest) {
@@ -19,7 +15,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'invalid' }, { status: 404 })
   }
 
-  const record: CodeRecord = typeof raw === 'string' ? JSON.parse(raw) : raw
+  const record: CouponRecordPersisted = typeof raw === 'string' ? JSON.parse(raw) : raw
   return NextResponse.json(record)
 }
 
@@ -43,7 +39,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid' }, { status: 404 })
   }
 
-  const record: CodeRecord = typeof raw === 'string' ? JSON.parse(raw) : raw
+  const record: CouponRecordPersisted = typeof raw === 'string' ? JSON.parse(raw) : raw
 
   if (record.redeemed) {
     return NextResponse.json(
@@ -53,7 +49,7 @@ export async function POST(req: NextRequest) {
   }
 
   const redeemedAt = new Date().toISOString()
-  const updated: CodeRecord = { redeemed: true, redeemedAt }
+  const updated: CouponRecordPersisted = { ...record, redeemed: true, redeemedAt }
   await redis.hSet('codes', code, JSON.stringify(updated))
 
   return NextResponse.json({ success: true, redeemedAt })

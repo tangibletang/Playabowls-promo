@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "generate-codes": "tsx scripts/generate-codes.ts",
-    "generate-pdf": "tsx scripts/generate-pdf.ts"
+    "generate-pdf": "tsx scripts/generate-pdf.ts",
+    "generate-pdf:scoops": "PDF_COUPON_IMAGE=scoops_coupon.png tsx scripts/generate-pdf.ts"
   },
   "dependencies": {
     "next": "^14.2.0",

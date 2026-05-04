@@ -225,7 +225,7 @@ body {
 }
 
 .admin-inner {
-  max-width: 800px;
+  max-width: 920px;
   margin: 0 auto;
 }
 
@@ -305,6 +305,33 @@ body {
 
 .code-table tr:hover td {
   background: #fafafa;
+}
+
+.code-table .btn-reset-row {
+  font-family: inherit;
+}
+
+.btn-reset-row {
+  display: inline-block;
+  padding: 5px 10px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-reset-row:hover:not(:disabled) {
+  background: #fef3c7;
+  border-color: #f59e0b;
+}
+
+.btn-reset-row:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .section-title {
