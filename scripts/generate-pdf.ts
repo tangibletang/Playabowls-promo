@@ -8,14 +8,14 @@
  *   and produces a print-ready PDF with 8 coupons per US Letter page,
  *   using your coupon design (coupon-bg.png/jpg) as the background.
  *
- * Place your coupon design file in the project root before running.
- * Tweak the variables below to position the QR code on your design.
+ * Design: save your artwork as coupon-bg.png (or .jpg) in the repo root —
+ * leave a plain “QR + code” area; tweak QR_X/Y and CODE_TEXT_X/Y until they sit in your blank box.
  */
 
 import './load-env'
 import * as fs from 'fs'
 import * as path from 'path'
-import { PDFDocument, rgb, LineCapStyle } from 'pdf-lib'
+import { PDFDocument, rgb, LineCapStyle, StandardFonts } from 'pdf-lib'
 import QRCode from 'qrcode'
 
 // ══════════════════════════════════════════════════════════════════
@@ -42,6 +42,12 @@ const CSV_INPUT = path.join(process.cwd(), 'codes.csv')
 const QR_X = 176   // points from left edge of coupon  →  try 170–200
 const QR_Y = 20    // points from bottom edge of coupon →  try 15–40
 const QR_SIZE = 80 // width and height in points        →  try 70–100
+
+// Human-readable code in your blank box (Courier = fixed width, easy to align)
+const SHOW_CODE_TEXT = true
+const CODE_TEXT_X = 14   // from left edge of coupon cell — nudge toward your blank area
+const CODE_TEXT_Y = 55   // from bottom edge of coupon cell — increase to move text up
+const CODE_TEXT_SIZE = 11 // try 10–13
 
 // Grid layout
 const COUPONS_PER_ROW = 2
@@ -106,6 +112,8 @@ async function main() {
   pdfDoc.setTitle('Playa Bowls $2 Off Coupons')
   pdfDoc.setAuthor('Playa Bowls Promo')
 
+  const codeFont = await pdfDoc.embedFont(StandardFonts.CourierBold)
+
   // Pre-embed background image once (all coupons share the same design)
   let bgImage: Awaited<ReturnType<typeof pdfDoc.embedPng>> | null = null
   if (bgBytes) {
@@ -160,6 +168,16 @@ async function main() {
         width: QR_SIZE,
         height: QR_SIZE,
       })
+
+      if (SHOW_CODE_TEXT) {
+        page.drawText(code.toUpperCase(), {
+          x: cellX + CODE_TEXT_X,
+          y: cellY + CODE_TEXT_Y,
+          size: CODE_TEXT_SIZE,
+          font: codeFont,
+          color: rgb(0.1, 0.1, 0.12),
+        })
+      }
     }
 
     // ── Cut lines ─────────────────────────────────────────────────
@@ -214,6 +232,9 @@ async function main() {
   console.log(`    ${codes.length} coupons across ${totalPages} pages`)
   console.log(`    Coupon size: ${(COUPON_W / 72).toFixed(2)}" × ${(COUPON_H / 72).toFixed(2)}"`)
   console.log(`    QR position: ${QR_X}pt from left, ${QR_Y}pt from bottom, ${QR_SIZE}pt square`)
+  if (SHOW_CODE_TEXT) {
+    console.log(`    Code text: ${CODE_TEXT_X}pt left, ${CODE_TEXT_Y}pt bottom, ${CODE_TEXT_SIZE}pt Courier`)
+  }
 }
 
 main().catch(err => {
