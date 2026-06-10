@@ -109,7 +109,7 @@ export default function AdminPage() {
   const [generatingCutout, setGeneratingCutout] = useState(false)
   const [downloadingSheet, setDownloadingSheet] = useState(false)
   const [previewCode, setPreviewCode] = useState<string | null>(null)
-  const [cutoutPreviewUrl, setCutoutPreviewUrl] = useState<string | null>(null)
+  const [cutoutPreviews, setCutoutPreviews] = useState<{ id: string; label: string; url: string }[]>([])
   const [couponDesign, setCouponDesign] = useState<File | null>(null)
   const [designPreview, setDesignPreview] = useState<string | null>(null)
   const [generatedThisSession, setGeneratedThisSession] = useState(false)
@@ -153,9 +153,13 @@ export default function AdminPage() {
 
   useEffect(() => {
     return () => {
-      if (cutoutPreviewUrl) URL.revokeObjectURL(cutoutPreviewUrl)
+      for (const c of cutoutPreviews) URL.revokeObjectURL(c.url)
     }
-  }, [cutoutPreviewUrl])
+  }, [cutoutPreviews])
+
+  const revokeCutoutPreviews = useCallback((previews: { url: string }[]) => {
+    for (const c of previews) URL.revokeObjectURL(c.url)
+  }, [])
 
   const markDemoGenerated = useCallback(async (code: string | null | undefined) => {
     setGeneratedThisSession(true)
@@ -170,6 +174,18 @@ export default function AdminPage() {
     if (couponDesign) form.append('design', couponDesign)
     return form
   }, [password, couponDesign])
+
+  const fetchCutoutBlob = async (code: string, preset?: string, design?: File | null) => {
+    const form = new FormData()
+    form.append('password', password)
+    form.append('code', code)
+    if (preset) form.append('preset', preset)
+    if (design) form.append('design', design)
+    const res = await fetch('/api/admin/demo-cutout', { method: 'POST', body: form })
+    if (!res.ok) return null
+    const blob = await res.blob()
+    return URL.createObjectURL(blob)
+  }
 
   const handlePreviewCutout = async () => {
     setGeneratingCutout(true)
@@ -186,22 +202,37 @@ export default function AdminPage() {
         return
       }
 
-      const cutoutForm = buildDesignForm()
-      cutoutForm.append('code', previewData.previewCode)
+      const code = previewData.previewCode
+      let next: { id: string; label: string; url: string }[] = []
 
-      const res = await fetch('/api/admin/demo-cutout', { method: 'POST', body: cutoutForm })
-      if (!res.ok) {
-        setError('Could not render cutout.')
-        return
+      if (couponDesign) {
+        const url = await fetchCutoutBlob(code, undefined, couponDesign)
+        if (!url) {
+          setError('Could not render cutout.')
+          return
+        }
+        next = [{ id: 'custom', label: 'Custom', url }]
+      } else {
+        const [hanoverUrl, scoopsUrl] = await Promise.all([
+          fetchCutoutBlob(code, 'playa'),
+          fetchCutoutBlob(code, 'scoops'),
+        ])
+        if (!hanoverUrl || !scoopsUrl) {
+          setError('Could not render cutouts.')
+          return
+        }
+        next = [
+          { id: 'playa', label: 'Hanover', url: hanoverUrl },
+          { id: 'scoops', label: 'Scoops', url: scoopsUrl },
+        ]
       }
 
-      const blob = await res.blob()
-      setCutoutPreviewUrl(prev => {
-        if (prev) URL.revokeObjectURL(prev)
-        return URL.createObjectURL(blob)
+      setCutoutPreviews(prev => {
+        revokeCutoutPreviews(prev)
+        return next
       })
 
-      await markDemoGenerated(previewData.previewCode)
+      await markDemoGenerated(code)
     } catch {
       setError('Network error.')
     } finally {
@@ -339,90 +370,74 @@ export default function AdminPage() {
         </div>
 
         <div className="coupon-generator" style={{ marginTop: 16, padding: '16px 18px', background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 10 }}>
-          <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-              <h2 className="section-title">Generate</h2>
-              <p className="admin-muted" style={{ marginBottom: 12 }}>
-                Unique single-use codes. Upload optional.
-              </p>
-              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#444', maxWidth: 360 }}>
-                Design (PNG/JPG)
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/jpg"
-                  onChange={e => setCouponDesign(e.target.files?.[0] ?? null)}
-                  style={{ display: 'block', marginTop: 6, fontSize: '0.875rem', width: '100%' }}
-                />
-              </label>
-              {designPreview && (
-                <img
-                  src={designPreview}
-                  alt="Upload preview"
-                  style={{ marginTop: 10, maxHeight: 80, maxWidth: '100%', borderRadius: 6, border: '1px solid #e5e7eb' }}
-                />
-              )}
-              <div style={{ marginTop: 12 }}>
-                <button
-                  type="button"
-                  onClick={handlePreviewCutout}
-                  disabled={generatingCutout || downloadingSheet}
-                  className="btn-primary"
-                  style={{ marginTop: 0, padding: '10px 16px', width: 'auto', fontSize: '0.875rem', fontWeight: 600 }}
-                >
-                  {generatingCutout ? '…' : 'Preview cutout'}
-                </button>
-              </div>
-
-              {(cutoutPreviewUrl || previewCode) && (
-                <div style={{ marginTop: 16, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                  {cutoutPreviewUrl && (
-                    <div>
-                      <p className="section-title" style={{ marginBottom: 8, fontSize: '0.9rem' }}>Cutout</p>
-                      <div style={{ width: 'min(100%, 280px)', padding: 8, border: '2px dashed #ccc', borderRadius: 6, background: '#fff' }}>
-                        <iframe
-                          src={cutoutPreviewUrl}
-                          title="Coupon cutout"
-                          style={{ display: 'block', width: '100%', aspectRatio: String(CUTOUT_ASPECT), border: 'none' }}
-                        />
-                      </div>
-                      <p className="admin-muted" style={{ marginTop: 6, fontSize: '0.8rem' }}>
-                        <button type="button" className="admin-btn-inline" onClick={handleDownloadPrintSheet} disabled={downloadingSheet}>
-                          {downloadingSheet ? '…' : 'Download print sheet'}
-                        </button>
-                      </p>
-                    </div>
-                  )}
-                  {previewCode && (
-                    <div>
-                      <p className="section-title" style={{ marginBottom: 8, fontSize: '0.9rem' }}>Redeem preview</p>
-                      <div style={{ width: 'min(100%, 280px)', border: '8px solid #1f2937', borderRadius: 24, overflow: 'hidden' }}>
-                        <iframe
-                          key={previewCode}
-                          src={`/redeem?code=${encodeURIComponent(previewCode)}`}
-                          title="Redeem preview"
-                          style={{ display: 'block', width: '100%', height: 480, border: 'none' }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div style={{ flex: '0 1 180px', minWidth: 140 }}>
-              <p className="section-title" style={{ fontSize: '0.9rem', marginBottom: 8 }}>Defaults</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div>
-                  <img src="/api/coupon-art/playa" alt="Playa" style={{ width: '100%', borderRadius: 6, border: '1px solid #e5e7eb' }} />
-                  <span className="admin-muted" style={{ fontSize: '0.75rem', marginTop: 4, display: 'block' }}>Playa</span>
-                </div>
-                <div>
-                  <img src="/api/coupon-art/scoops" alt="Scoops" style={{ width: '100%', borderRadius: 6, border: '1px solid #e5e7eb' }} />
-                  <span className="admin-muted" style={{ fontSize: '0.75rem', marginTop: 4, display: 'block' }}>Scoops</span>
-                </div>
-              </div>
-            </div>
+          <h2 className="section-title">Generate</h2>
+          <p className="admin-muted" style={{ marginBottom: 12 }}>
+            Unique single-use codes. Upload optional.
+          </p>
+          <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#444', maxWidth: 360 }}>
+            Design (PNG/JPG)
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/jpg"
+              onChange={e => setCouponDesign(e.target.files?.[0] ?? null)}
+              style={{ display: 'block', marginTop: 6, fontSize: '0.875rem', width: '100%' }}
+            />
+          </label>
+          {designPreview && (
+            <img
+              src={designPreview}
+              alt="Upload preview"
+              style={{ marginTop: 10, maxHeight: 64, maxWidth: 200, borderRadius: 6, border: '1px solid #e5e7eb' }}
+            />
+          )}
+          <div style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              onClick={handlePreviewCutout}
+              disabled={generatingCutout || downloadingSheet}
+              className="btn-primary"
+              style={{ marginTop: 0, padding: '10px 16px', width: 'auto', fontSize: '0.875rem', fontWeight: 600 }}
+            >
+              {generatingCutout ? '…' : 'Preview cutout'}
+            </button>
           </div>
+
+          {(cutoutPreviews.length > 0 || previewCode) && (
+            <div className="preview-row">
+              {cutoutPreviews.map(c => (
+                <div className="preview-cutout-slot" key={c.id}>
+                  <p className={`preview-cutout-label preview-cutout-label-${c.id}`}>{c.label}</p>
+                  <div className="preview-cutout-frame">
+                    <iframe
+                      src={c.url}
+                      title={`${c.label} cutout`}
+                      className="preview-cutout-iframe"
+                    />
+                  </div>
+                </div>
+              ))}
+              {previewCode && (
+                <div className="preview-phone-slot">
+                  <p className="preview-cutout-label">Redeem</p>
+                  <div className="preview-phone-frame">
+                    <iframe
+                      key={previewCode}
+                      src={`/redeem?code=${encodeURIComponent(previewCode)}`}
+                      title="Redeem preview"
+                      className="preview-phone-iframe"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {cutoutPreviews.length > 0 && (
+            <p className="admin-muted" style={{ marginTop: 8, fontSize: '0.8rem' }}>
+              <button type="button" className="admin-btn-inline" onClick={handleDownloadPrintSheet} disabled={downloadingSheet}>
+                {downloadingSheet ? '…' : 'Download print sheet'}
+              </button>
+            </p>
+          )}
         </div>
 
         {error && <p className="error-msg" style={{ marginTop: 12 }}>{error}</p>}

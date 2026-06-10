@@ -413,6 +413,63 @@ body {
   font-weight: 500;
 }
 
+.preview-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  margin-top: 14px;
+}
+
+.preview-cutout-slot,
+.preview-phone-slot {
+  flex: 0 0 auto;
+  width: 190px;
+}
+
+.preview-cutout-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #444;
+}
+
+.preview-cutout-label-playa {
+  color: var(--pink-dark);
+}
+
+.preview-cutout-label-scoops {
+  color: #0077b6;
+}
+
+.preview-cutout-frame {
+  padding: 6px;
+  border: 2px dashed #ccc;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.preview-cutout-iframe {
+  display: block;
+  width: 100%;
+  aspect-ratio: 278 / 147.2;
+  border: none;
+}
+
+.preview-phone-frame {
+  border: 7px solid #1f2937;
+  border-radius: 20px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.preview-phone-iframe {
+  display: block;
+  width: 100%;
+  height: 300px;
+  border: none;
+}
+
 /* ── Loading spinner ─────────────────────────────── */
 
 .spinner {
