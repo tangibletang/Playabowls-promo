@@ -4,6 +4,8 @@ import {
   campaignBucket,
   formatCampaignHeading,
 } from '@/lib/coupon-record'
+import { DEMO_CAMPAIGN } from '@/lib/demo-batch'
+import { applyPortfolioPresentation } from '@/lib/portfolio-stats'
 import { getRedis } from '@/lib/redis'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -30,8 +32,6 @@ type DashboardPayload = {
   campaigns: Record<string, CampaignTotals & { heading: string }>
   demoMode: boolean
 }
-
-const DEMO_CAMPAIGN = 'demo'
 
 async function buildDashboard(redis: Awaited<ReturnType<typeof getRedis>>, demoMode: boolean): Promise<DashboardPayload> {
   const allCodes = await redis.hGetAll('codes')
@@ -152,5 +152,6 @@ export async function POST(req: NextRequest) {
     await redis.hSet('codes', code, JSON.stringify(cleared))
   }
 
-  return NextResponse.json(await buildDashboard(redis, demoMode))
+  const payload = await buildDashboard(redis, demoMode)
+  return NextResponse.json(applyPortfolioPresentation(payload))
 }

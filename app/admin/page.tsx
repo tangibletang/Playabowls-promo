@@ -47,6 +47,8 @@ const EMPTY_STATS: Stats = {
 }
 
 const DEMO_BUCKET = 'demo'
+/** Matches the 2×5 Letter grid cell (printer slip proportions). */
+const CUTOUT_ASPECT = 278 / 147.2
 
 type ApiFail = 'unauthorized' | 'bad_request' | 'invalid_code' | 'unknown_code' | 'not_redeemed' | string
 
@@ -142,15 +144,31 @@ async function adminRequest(password: string, resetCode?: string) {
   })
 }
 
+function cleanupGeneratedBatch(password: string) {
+  fetch('/api/admin/demo-cleanup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+    keepalive: true,
+  }).catch(() => {})
+}
+
 export default function AdminPage() {
   const [password, setPassword] = useState('')
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(false)
-  const [checkingDemo, setCheckingDemo] = useState(true)
+  const [initialLoad, setInitialLoad] = useState(true)
   const [error, setError] = useState('')
   const [resettingCode, setResettingCode] = useState<string | null>(null)
   const [viewIndex, setViewIndex] = useState(0)
-  const [generatingPdf, setGeneratingPdf] = useState(false)
+  const [generatingCutout, setGeneratingCutout] = useState(false)
+  const [downloadingSheet, setDownloadingSheet] = useState(false)
+  const [previewingRedemption, setPreviewingRedemption] = useState(false)
+  const [previewCode, setPreviewCode] = useState<string | null>(null)
+  const [cutoutPreviewUrl, setCutoutPreviewUrl] = useState<string | null>(null)
+  const [couponDesign, setCouponDesign] = useState<File | null>(null)
+  const [designPreview, setDesignPreview] = useState<string | null>(null)
+  const [generatedThisSession, setGeneratedThisSession] = useState(false)
 
   const refreshDashboard = useCallback(async (pwd: string) => {
     const res = await adminRequest(pwd)
@@ -162,46 +180,137 @@ export default function AdminPage() {
     return { ok: true as const, stats: normalizeDashboard(data) }
   }, [])
 
-  // If the dashboard is open (no ADMIN_PASSWORD configured server-side), an empty
-  // password succeeds and we can skip the login screen entirely.
   useEffect(() => {
     let cancelled = false
     refreshDashboard('').then(result => {
       if (cancelled) return
       if (result.ok) setStats(result.stats)
-      setCheckingDemo(false)
+      setInitialLoad(false)
     })
     return () => { cancelled = true }
   }, [refreshDashboard])
 
-  const handleGenerateDemoPdf = async () => {
-    setGeneratingPdf(true)
+  useEffect(() => {
+    if (!couponDesign) {
+      setDesignPreview(null)
+      return
+    }
+    const url = URL.createObjectURL(couponDesign)
+    setDesignPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [couponDesign])
+
+  useEffect(() => {
+    if (!generatedThisSession) return
+
+    const onLeave = () => cleanupGeneratedBatch(password)
+
+    window.addEventListener('pagehide', onLeave)
+    return () => window.removeEventListener('pagehide', onLeave)
+  }, [generatedThisSession, password])
+
+  useEffect(() => {
+    return () => {
+      if (cutoutPreviewUrl) URL.revokeObjectURL(cutoutPreviewUrl)
+    }
+  }, [cutoutPreviewUrl])
+
+  const markDemoGenerated = useCallback(async (code: string | null | undefined) => {
+    setGeneratedThisSession(true)
+    if (code) setPreviewCode(code)
+    const result = await refreshDashboard(password)
+    if (result.ok) setStats(result.stats)
+  }, [password, refreshDashboard])
+
+  const buildDesignForm = useCallback(() => {
+    const form = new FormData()
+    form.append('password', password)
+    if (couponDesign) form.append('design', couponDesign)
+    return form
+  }, [password, couponDesign])
+
+  const handlePreviewCutout = async () => {
+    setGeneratingCutout(true)
     setError('')
     try {
-      const res = await fetch('/api/admin/demo-pdf', {
+      const previewRes = await fetch('/api/admin/demo-preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
       })
+      const previewData = await previewRes.json() as { previewCode?: string; error?: string }
+      if (!previewRes.ok || !previewData.previewCode) {
+        setError('Could not generate coupon — try again.')
+        return
+      }
+
+      const cutoutForm = buildDesignForm()
+      cutoutForm.append('code', previewData.previewCode)
+
+      const res = await fetch('/api/admin/demo-cutout', { method: 'POST', body: cutoutForm })
       if (!res.ok) {
-        setError('Could not generate demo PDF — try again.')
+        setError('Could not render coupon cutout — try again.')
+        return
+      }
+
+      const blob = await res.blob()
+      setCutoutPreviewUrl(prev => {
+        if (prev) URL.revokeObjectURL(prev)
+        return URL.createObjectURL(blob)
+      })
+
+      await markDemoGenerated(previewData.previewCode)
+    } catch {
+      setError('Network error — try again.')
+    } finally {
+      setGeneratingCutout(false)
+    }
+  }
+
+  const handleDownloadPrintSheet = async () => {
+    setDownloadingSheet(true)
+    setError('')
+    try {
+      const form = buildDesignForm()
+      form.append('reuseBatch', 'true')
+
+      const res = await fetch('/api/admin/demo-pdf', { method: 'POST', body: form })
+      if (!res.ok) {
+        setError('Could not generate print sheet — preview a cutout first.')
         return
       }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'demo-coupons.pdf'
-      a.click()
-      URL.revokeObjectURL(url)
+      window.open(url, '_blank', 'noopener,noreferrer')
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
 
-      // Refresh so the new "demo" batch shows up in the dashboard.
-      const result = await refreshDashboard(password)
-      if (result.ok) setStats(result.stats)
+      await markDemoGenerated(res.headers.get('X-Preview-Code'))
     } catch {
       setError('Network error — try again.')
     } finally {
-      setGeneratingPdf(false)
+      setDownloadingSheet(false)
+    }
+  }
+
+  const handlePreviewRedemption = async () => {
+    setPreviewingRedemption(true)
+    setError('')
+    try {
+      const res = await fetch('/api/admin/demo-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
+      const data = await res.json() as { previewCode?: string; error?: string }
+      if (!res.ok || !data.previewCode) {
+        setError('Could not load redemption preview — try again.')
+        return
+      }
+      await markDemoGenerated(data.previewCode)
+    } catch {
+      setError('Network error — try again.')
+    } finally {
+      setPreviewingRedemption(false)
     }
   }
 
@@ -241,7 +350,7 @@ export default function AdminPage() {
           unknown_code: 'That code does not exist in this project.',
           not_redeemed: 'That code is already available (not redeemed).',
           invalid_code: 'Invalid code format.',
-          demo_restricted: 'Demo mode only allows resetting "demo" batch codes (use "Generate Demo Coupons" below).',
+          demo_restricted: 'Only freshly generated coupon codes can be reset here.',
         }
         const key = typeof data.error === 'string' ? data.error : 'error'
         setError(map[key] ?? `Could not reset: ${key}`)
@@ -258,7 +367,7 @@ export default function AdminPage() {
 
   // ── Login form ─────────────────────────────────────
   if (!stats) {
-    if (checkingDemo) {
+    if (initialLoad) {
       return (
         <main className="page">
           <div className="card">
@@ -310,7 +419,7 @@ export default function AdminPage() {
           <div>
             <h1 className="admin-title">Admin Dashboard</h1>
             <p style={{ color: '#666', fontSize: '0.85rem', marginTop: 4 }}>
-              Same redeem site for Playa and Scoops — use ‹ › to focus one brand or see combined totals.
+              QR redemption stats across campaigns — use ‹ › to focus one brand or see combined totals.
             </p>
           </div>
           {!stats.demoMode && (
@@ -324,24 +433,177 @@ export default function AdminPage() {
           )}
         </div>
 
-        {stats.demoMode && (
-          <div style={{ marginTop: 16, padding: '12px 16px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, fontSize: '0.85rem', color: '#1e3a8a' }}>
-            <strong>🚀 Demo mode</strong> — this dashboard is open for portfolio viewing. The Playa/Scoops totals below are
-            real historical data and are read-only. Click <strong>Generate Demo Coupons</strong> to create your own batch
-            of fresh QR codes (campaign “demo”) and download a printable PDF — those are the only codes you can reset here.
-            <div style={{ marginTop: 10 }}>
-              <button
-                type="button"
-                onClick={handleGenerateDemoPdf}
-                disabled={generatingPdf}
-                className="btn-primary"
-                style={{ marginTop: 0, padding: '10px 18px', width: 'auto', fontSize: '0.9rem' }}
-              >
-                {generatingPdf ? 'Generating…' : 'Generate Demo Coupons (PDF)'}
-              </button>
+        <div className="coupon-generator" style={{ marginTop: 20, padding: '16px 18px', background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 12 }}>
+          <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+              <h2 className="section-title" style={{ marginBottom: 4 }}>Generate coupons</h2>
+              <p style={{ color: '#444', fontSize: '0.85rem', marginBottom: 8, lineHeight: 1.45 }}>
+                Every code is unique and single-use — redemption confirms the coupon is authentic, not a screenshot or duplicate.
+              </p>
+              <p style={{ color: '#666', fontSize: '0.82rem', marginBottom: 14 }}>
+                Upload your own design (optional) or use a default. Preview shows one printer cutout — the slip you&apos;d cut from the sheet.
+              </p>
+              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#444', maxWidth: 360 }}>
+                Coupon design
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg"
+                  onChange={e => setCouponDesign(e.target.files?.[0] ?? null)}
+                  style={{ display: 'block', marginTop: 6, fontSize: '0.8rem', width: '100%' }}
+                />
+                <span style={{ fontWeight: 400, color: '#888', fontSize: '0.75rem' }}>PNG or JPG · Playa default if empty</span>
+              </label>
+              {designPreview && (
+                <div style={{ marginTop: 12 }}>
+                  <img
+                    src={designPreview}
+                    alt="Uploaded coupon design preview"
+                    style={{ maxHeight: 100, maxWidth: '100%', borderRadius: 8, border: '1px solid #e5e7eb' }}
+                  />
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
+                <button
+                  type="button"
+                  onClick={handlePreviewCutout}
+                  disabled={generatingCutout || downloadingSheet || previewingRedemption}
+                  className="btn-primary"
+                  style={{ marginTop: 0, padding: '10px 18px', width: 'auto', fontSize: '0.9rem' }}
+                >
+                  {generatingCutout ? 'Generating…' : 'Preview coupon cutout'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePreviewRedemption}
+                  disabled={generatingCutout || downloadingSheet || previewingRedemption}
+                  style={{
+                    marginTop: 0,
+                    padding: '10px 18px',
+                    width: 'auto',
+                    fontSize: '0.9rem',
+                    borderRadius: 10,
+                    border: '1px solid #e5e7eb',
+                    background: '#fff',
+                    color: '#333',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {previewingRedemption ? 'Loading…' : 'Preview redemption'}
+                </button>
+              </div>
+
+              {cutoutPreviewUrl && (
+                <div style={{ marginTop: 18 }}>
+                  <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#444', marginBottom: 8 }}>
+                    Printer cutout — one slip
+                  </p>
+                  <div
+                    style={{
+                      maxWidth: 380,
+                      padding: 10,
+                      border: '2px dashed #c4c4c4',
+                      borderRadius: 6,
+                      background: '#fff',
+                      boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+                    }}
+                  >
+                    <iframe
+                      src={cutoutPreviewUrl}
+                      title="Coupon cutout preview"
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        aspectRatio: String(CUTOUT_ASPECT),
+                        border: 'none',
+                        borderRadius: 2,
+                      }}
+                    />
+                  </div>
+                  <p style={{ fontSize: '0.75rem', color: '#888', marginTop: 8 }}>
+                    Cut along the dashed border · same size as one cell on the 2×5 print sheet
+                    {' · '}
+                    <button
+                      type="button"
+                      onClick={handleDownloadPrintSheet}
+                      disabled={downloadingSheet}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        padding: 0,
+                        color: '#2563eb',
+                        cursor: 'pointer',
+                        fontSize: 'inherit',
+                        textDecoration: 'underline',
+                      }}
+                    >
+                      {downloadingSheet ? 'Preparing…' : 'Download full print sheet'}
+                    </button>
+                  </p>
+                </div>
+              )}
+
+              {previewCode && (
+                <div style={{ marginTop: 18 }}>
+                  <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#444', marginBottom: 10 }}>
+                    Customer view — what they see after scanning
+                  </p>
+                  <div
+                    style={{
+                      width: 'min(100%, 300px)',
+                      border: '10px solid #1f2937',
+                      borderRadius: 28,
+                      overflow: 'hidden',
+                      boxShadow: '0 12px 32px rgba(0,0,0,0.12)',
+                      background: '#fff',
+                    }}
+                  >
+                    <iframe
+                      key={previewCode}
+                      src={`/redeem?code=${encodeURIComponent(previewCode)}`}
+                      title="Redemption preview"
+                      style={{ display: 'block', width: '100%', height: 520, border: 'none' }}
+                    />
+                  </div>
+                  <p style={{ fontSize: '0.75rem', color: '#888', marginTop: 8 }}>
+                    Code <code style={{ background: '#f3f4f6', padding: '2px 6px', borderRadius: 4 }}>{previewCode}</code>
+                    {' · '}
+                    <a
+                      href={`/redeem?code=${encodeURIComponent(previewCode)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: '#2563eb' }}
+                    >
+                      Open full screen
+                    </a>
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div style={{ flex: '0 1 200px', minWidth: 160 }}>
+              <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#444', marginBottom: 10 }}>Default designs</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  <img
+                    src="/api/coupon-art/playa"
+                    alt="Playa Bowls default coupon"
+                    style={{ width: '100%', borderRadius: 8, border: '1px solid #e5e7eb', display: 'block' }}
+                  />
+                  <span style={{ fontSize: '0.72rem', color: '#888', marginTop: 4, display: 'block' }}>Playa Bowls</span>
+                </div>
+                <div>
+                  <img
+                    src="/api/coupon-art/scoops"
+                    alt="Scoops default coupon"
+                    style={{ width: '100%', borderRadius: 8, border: '1px solid #e5e7eb', display: 'block' }}
+                  />
+                  <span style={{ fontSize: '0.72rem', color: '#888', marginTop: 4, display: 'block' }}>Scoops</span>
+                </div>
+              </div>
             </div>
           </div>
-        )}
+        </div>
 
         {error && (
           <p className="error-msg" style={{ marginTop: 12, marginBottom: 0 }}>
@@ -389,21 +651,9 @@ export default function AdminPage() {
 
         {fd.campaignKeys.length > 0 && (
           <div style={{ marginBottom: 28 }}>
-            <h2 className="section-title" style={{ marginBottom: 8 }}>
+            <h2 className="section-title" style={{ marginBottom: 12 }}>
               {slice === 'all' ? 'By campaign' : 'Campaign breakdown'}
             </h2>
-            <p style={{ color: '#888', fontSize: '0.78rem', marginBottom: 12 }}>
-              {slice === 'all' ? (
-                <>
-                  Each batch uses the slug from <code style={{ fontSize: '0.76rem', background: '#f3f4f6', padding: '2px 5px', borderRadius: 4 }}>npm run generate-codes -- --campaign …</code>.
-                  Playa’s first batch lives in the legacy bucket unless you retagged it.
-                </>
-              ) : slice === 'playa' ? (
-                <>Showing only Playa’s legacy (“no tag”) Redis entries.</>
-              ) : (
-                <>Showing buckets whose slug is <code style={{ fontSize: '0.76rem', background: '#f3f4f6', padding: '2px 5px', borderRadius: 4 }}>scoops</code> or starts with <code style={{ fontSize: '0.76rem', background: '#f3f4f6', padding: '2px 5px', borderRadius: 4 }}>scoops-</code>.</>
-              )}
-            </p>
             <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
               {fd.campaignKeys.map(key => (
                 <div className="stat-card" key={key}>
@@ -430,9 +680,11 @@ export default function AdminPage() {
           </div>
         ) : fd.redeemedCodes.length > 0 ? (
           <div>
-            <h2 className="section-title">Redeemed codes ({fd.redeemedCodes.length})</h2>
+            <h2 className="section-title">Redeemed codes ({fd.redeemed})</h2>
             <p style={{ color: '#888', fontSize: '0.78rem', marginTop: '-6px', marginBottom: 12 }}>
-              Reset applies in Redis · the table respects the Playa / Scoops filter above.
+              {fd.redeemedCodes.length < fd.redeemed
+                ? `Showing ${fd.redeemedCodes.length} recent redemptions · ${fd.redeemed.toLocaleString()} total in this slice.`
+                : 'Reset applies in Redis · the table respects the Playa / Scoops filter above.'}
             </p>
             <div className="code-table admin-table-reset">
               <table>
@@ -464,7 +716,7 @@ export default function AdminPage() {
                           disabled={resettingCode !== null || resetLocked}
                           onClick={() => handleResetCoupon(row.code)}
                           className="btn-reset-row"
-                          title={resetLocked ? 'Read-only in demo mode' : `Clear redemption for ${row.code}`}
+                          title={resetLocked ? 'Historical codes cannot be reset' : `Clear redemption for ${row.code}`}
                         >
                           {resettingCode === row.code ? '…' : 'Reset'}
                         </button>

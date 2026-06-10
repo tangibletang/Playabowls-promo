@@ -7,3 +7,4 @@ node_modules/
 *.pdf
 coupon-bg.*
 .vercel
+.env*.local
