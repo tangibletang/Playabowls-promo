@@ -364,6 +364,55 @@ body {
   text-decoration: underline;
 }
 
+.section-title-campaign {
+  color: var(--pink);
+}
+
+.campaign-card {
+  background: white;
+  border-radius: 10px;
+  padding: 16px 16px 16px 14px;
+  box-shadow: var(--shadow);
+  border-left: 3px solid #e5e7eb;
+  text-align: left;
+}
+
+.campaign-card-playa {
+  border-left-color: var(--pink);
+  background: linear-gradient(135deg, #fff 0%, #fff8fb 100%);
+}
+
+.campaign-card-playa .campaign-name {
+  color: var(--pink-dark);
+}
+
+.campaign-card-scoops {
+  border-left-color: var(--teal);
+  background: linear-gradient(135deg, #fff 0%, #f0fbff 100%);
+}
+
+.campaign-card-scoops .campaign-name {
+  color: #0077b6;
+}
+
+.campaign-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.campaign-stats {
+  font-size: 0.8rem;
+  color: #555;
+  display: grid;
+  gap: 2px;
+}
+
+.campaign-stat-redeemed {
+  color: #16a34a;
+  font-weight: 500;
+}
+
 /* ── Loading spinner ─────────────────────────────── */
 
 .spinner {

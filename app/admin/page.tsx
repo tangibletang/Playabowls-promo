@@ -66,6 +66,12 @@ function normalizeDashboard(data: Record<string, unknown>): Stats {
   }
 }
 
+function campaignCardClass(key: string): string {
+  if (key === ADMIN_ORIGINAL_BUCKET) return 'campaign-card campaign-card-playa'
+  if (key === 'scoops' || key.startsWith('scoops')) return 'campaign-card campaign-card-scoops'
+  return 'campaign-card'
+}
+
 function sortedCampaignKeys(campaigns: Record<string, CampaignTotals>): string[] {
   return Object.keys(campaigns)
     .filter(k => campaigns[k].total > 0)
@@ -102,7 +108,6 @@ export default function AdminPage() {
   const [resettingCode, setResettingCode] = useState<string | null>(null)
   const [generatingCutout, setGeneratingCutout] = useState(false)
   const [downloadingSheet, setDownloadingSheet] = useState(false)
-  const [previewingRedemption, setPreviewingRedemption] = useState(false)
   const [previewCode, setPreviewCode] = useState<string | null>(null)
   const [cutoutPreviewUrl, setCutoutPreviewUrl] = useState<string | null>(null)
   const [couponDesign, setCouponDesign] = useState<File | null>(null)
@@ -224,28 +229,6 @@ export default function AdminPage() {
       setError('Network error.')
     } finally {
       setDownloadingSheet(false)
-    }
-  }
-
-  const handlePreviewRedemption = async () => {
-    setPreviewingRedemption(true)
-    setError('')
-    try {
-      const res = await fetch('/api/admin/demo-preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      })
-      const data = await res.json() as { previewCode?: string }
-      if (!res.ok || !data.previewCode) {
-        setError('Could not load preview.')
-        return
-      }
-      await markDemoGenerated(data.previewCode)
-    } catch {
-      setError('Network error.')
-    } finally {
-      setPreviewingRedemption(false)
     }
   }
 
@@ -378,55 +361,50 @@ export default function AdminPage() {
                   style={{ marginTop: 10, maxHeight: 80, maxWidth: '100%', borderRadius: 6, border: '1px solid #e5e7eb' }}
                 />
               )}
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+              <div style={{ marginTop: 12 }}>
                 <button
                   type="button"
                   onClick={handlePreviewCutout}
-                  disabled={generatingCutout || downloadingSheet || previewingRedemption}
+                  disabled={generatingCutout || downloadingSheet}
                   className="btn-primary"
                   style={{ marginTop: 0, padding: '10px 16px', width: 'auto', fontSize: '0.875rem', fontWeight: 600 }}
                 >
                   {generatingCutout ? '…' : 'Preview cutout'}
                 </button>
-                <button
-                  type="button"
-                  onClick={handlePreviewRedemption}
-                  disabled={generatingCutout || downloadingSheet || previewingRedemption}
-                  className="admin-btn-secondary"
-                >
-                  {previewingRedemption ? '…' : 'Preview redeem'}
-                </button>
               </div>
 
-              {cutoutPreviewUrl && (
-                <div style={{ marginTop: 16 }}>
-                  <p className="section-title" style={{ marginBottom: 8, fontSize: '0.9rem' }}>Cutout</p>
-                  <div style={{ maxWidth: 360, padding: 8, border: '2px dashed #ccc', borderRadius: 6, background: '#fff' }}>
-                    <iframe
-                      src={cutoutPreviewUrl}
-                      title="Coupon cutout"
-                      style={{ display: 'block', width: '100%', aspectRatio: String(CUTOUT_ASPECT), border: 'none' }}
-                    />
-                  </div>
-                  <p className="admin-muted" style={{ marginTop: 6, fontSize: '0.8rem' }}>
-                    <button type="button" className="admin-btn-inline" onClick={handleDownloadPrintSheet} disabled={downloadingSheet}>
-                      {downloadingSheet ? '…' : 'Download print sheet'}
-                    </button>
-                  </p>
-                </div>
-              )}
-
-              {previewCode && (
-                <div style={{ marginTop: 16 }}>
-                  <p className="section-title" style={{ marginBottom: 8, fontSize: '0.9rem' }}>Redeem preview</p>
-                  <div style={{ width: 'min(100%, 280px)', border: '8px solid #1f2937', borderRadius: 24, overflow: 'hidden' }}>
-                    <iframe
-                      key={previewCode}
-                      src={`/redeem?code=${encodeURIComponent(previewCode)}`}
-                      title="Redeem preview"
-                      style={{ display: 'block', width: '100%', height: 480, border: 'none' }}
-                    />
-                  </div>
+              {(cutoutPreviewUrl || previewCode) && (
+                <div style={{ marginTop: 16, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  {cutoutPreviewUrl && (
+                    <div>
+                      <p className="section-title" style={{ marginBottom: 8, fontSize: '0.9rem' }}>Cutout</p>
+                      <div style={{ width: 'min(100%, 280px)', padding: 8, border: '2px dashed #ccc', borderRadius: 6, background: '#fff' }}>
+                        <iframe
+                          src={cutoutPreviewUrl}
+                          title="Coupon cutout"
+                          style={{ display: 'block', width: '100%', aspectRatio: String(CUTOUT_ASPECT), border: 'none' }}
+                        />
+                      </div>
+                      <p className="admin-muted" style={{ marginTop: 6, fontSize: '0.8rem' }}>
+                        <button type="button" className="admin-btn-inline" onClick={handleDownloadPrintSheet} disabled={downloadingSheet}>
+                          {downloadingSheet ? '…' : 'Download print sheet'}
+                        </button>
+                      </p>
+                    </div>
+                  )}
+                  {previewCode && (
+                    <div>
+                      <p className="section-title" style={{ marginBottom: 8, fontSize: '0.9rem' }}>Redeem preview</p>
+                      <div style={{ width: 'min(100%, 280px)', border: '8px solid #1f2937', borderRadius: 24, overflow: 'hidden' }}>
+                        <iframe
+                          key={previewCode}
+                          src={`/redeem?code=${encodeURIComponent(previewCode)}`}
+                          title="Redeem preview"
+                          style={{ display: 'block', width: '100%', height: 480, border: 'none' }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -470,14 +448,14 @@ export default function AdminPage() {
 
         {campaignKeys.length > 0 && (
           <div style={{ marginBottom: 24 }}>
-            <h2 className="section-title">Campaigns</h2>
+            <h2 className="section-title section-title-campaign">By campaign</h2>
             <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
               {campaignKeys.map(key => (
-                <div className="stat-card" key={key} style={{ textAlign: 'left' }}>
-                  <div style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: 8 }}>{stats.campaigns[key].heading}</div>
-                  <div style={{ fontSize: '0.8rem', color: '#555', display: 'grid', gap: 2 }}>
+                <div className={campaignCardClass(key)} key={key}>
+                  <div className="campaign-name">{stats.campaigns[key].heading}</div>
+                  <div className="campaign-stats">
                     <span>{stats.campaigns[key].total} total</span>
-                    <span>{stats.campaigns[key].redeemed} redeemed</span>
+                    <span className="campaign-stat-redeemed">{stats.campaigns[key].redeemed} redeemed</span>
                     <span>{stats.campaigns[key].remaining} left</span>
                   </div>
                 </div>
