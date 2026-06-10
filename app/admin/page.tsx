@@ -3,20 +3,12 @@
 import { useCallback, useEffect, useMemo, useState, FormEvent } from 'react'
 
 const ADMIN_ORIGINAL_BUCKET = '__original__'
-
-function isPlayaCampaignBucket(bucket: string): boolean {
-  return bucket === ADMIN_ORIGINAL_BUCKET
-}
-
-function isScoopsCampaignBucket(bucket: string): boolean {
-  const s = bucket.trim().toLowerCase()
-  return s === 'scoops' || s.startsWith('scoops-')
-}
+const DEMO_BUCKET = 'demo'
+const CUTOUT_ASPECT = 278 / 147.2
 
 interface RedeemedCode {
   code: string
   redeemedAt: string
-  /** Present for all rows after server update; missing older responses default to Playa legacy. */
   campaignBucket?: string
   campaignHeading?: string
 }
@@ -46,16 +38,7 @@ const EMPTY_STATS: Stats = {
   demoMode: false,
 }
 
-const DEMO_BUCKET = 'demo'
-/** Matches the 2×5 Letter grid cell (printer slip proportions). */
-const CUTOUT_ASPECT = 278 / 147.2
-
 type ApiFail = 'unauthorized' | 'bad_request' | 'invalid_code' | 'unknown_code' | 'not_redeemed' | string
-
-function campaignSlugFootnote(bucketKey: string): string {
-  if (bucketKey === ADMIN_ORIGINAL_BUCKET) return 'Playa legacy · no campaign tag in Redis'
-  return `@${bucketKey}`
-}
 
 function fmt(iso: string) {
   return new Date(iso).toLocaleString('en-US', {
@@ -83,57 +66,14 @@ function normalizeDashboard(data: Record<string, unknown>): Stats {
   }
 }
 
-const VIEW_CYCLE = ['all', 'playa', 'scoops'] as const
-type CampaignSlice = (typeof VIEW_CYCLE)[number]
-
-function rowBucket(row: RedeemedCode): string {
-  return row.campaignBucket ?? ADMIN_ORIGINAL_BUCKET
-}
-
-function filterDashboard(stats: Stats, slice: CampaignSlice) {
-  if (slice === 'all') {
-    const pct = stats.total > 0 ? Math.round((stats.redeemed / stats.total) * 100) : 0
-    return {
-      label: 'All programs',
-      sub: `${stats.total.toLocaleString()} QR codes in this project · Playa + Scoops (+ any other batches)`,
-      total: stats.total,
-      redeemed: stats.redeemed,
-      remaining: stats.remaining,
-      pct,
-      redeemedCodes: stats.redeemedCodes,
-      campaignKeys: Object.keys(stats.campaigns)
-        .filter(k => stats.campaigns[k].total > 0)
-        .sort((a, b) => {
-          if (a === ADMIN_ORIGINAL_BUCKET) return -1
-          if (b === ADMIN_ORIGINAL_BUCKET) return 1
-          return a.localeCompare(b)
-        }),
-    }
-  }
-
-  const bucketMatch = slice === 'playa' ? isPlayaCampaignBucket : isScoopsCampaignBucket
-  const campaignKeys = Object.keys(stats.campaigns).filter(k => bucketMatch(k) && stats.campaigns[k].total > 0)
-
-  let total = 0
-  let redeemed = 0
-  for (const k of campaignKeys) {
-    const c = stats.campaigns[k]
-    total += c.total
-    redeemed += c.redeemed
-  }
-  const remaining = total - redeemed
-  const pct = total > 0 ? Math.round((redeemed / total) * 100) : 0
-  const redeemedCodes = stats.redeemedCodes.filter(r => bucketMatch(rowBucket(r)))
-
-  const label = slice === 'playa' ? 'Playa Bowls' : 'Scoops'
-  const sub =
-    total > 0
-      ? `${total.toLocaleString()} QR codes in this batch`
-      : slice === 'scoops'
-        ? 'No Scoops-tagged coupons in Redis yet · run generate-codes -- --campaign …'
-        : 'No legacy Playa batch in Redis yet'
-
-  return { label, sub, total, redeemed, remaining, pct, redeemedCodes, campaignKeys }
+function sortedCampaignKeys(campaigns: Record<string, CampaignTotals>): string[] {
+  return Object.keys(campaigns)
+    .filter(k => campaigns[k].total > 0)
+    .sort((a, b) => {
+      if (a === ADMIN_ORIGINAL_BUCKET) return -1
+      if (b === ADMIN_ORIGINAL_BUCKET) return 1
+      return a.localeCompare(b)
+    })
 }
 
 async function adminRequest(password: string, resetCode?: string) {
@@ -160,7 +100,6 @@ export default function AdminPage() {
   const [initialLoad, setInitialLoad] = useState(true)
   const [error, setError] = useState('')
   const [resettingCode, setResettingCode] = useState<string | null>(null)
-  const [viewIndex, setViewIndex] = useState(0)
   const [generatingCutout, setGeneratingCutout] = useState(false)
   const [downloadingSheet, setDownloadingSheet] = useState(false)
   const [previewingRedemption, setPreviewingRedemption] = useState(false)
@@ -202,9 +141,7 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!generatedThisSession) return
-
     const onLeave = () => cleanupGeneratedBatch(password)
-
     window.addEventListener('pagehide', onLeave)
     return () => window.removeEventListener('pagehide', onLeave)
   }, [generatedThisSession, password])
@@ -238,9 +175,9 @@ export default function AdminPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
       })
-      const previewData = await previewRes.json() as { previewCode?: string; error?: string }
+      const previewData = await previewRes.json() as { previewCode?: string }
       if (!previewRes.ok || !previewData.previewCode) {
-        setError('Could not generate coupon — try again.')
+        setError('Could not generate coupon.')
         return
       }
 
@@ -249,7 +186,7 @@ export default function AdminPage() {
 
       const res = await fetch('/api/admin/demo-cutout', { method: 'POST', body: cutoutForm })
       if (!res.ok) {
-        setError('Could not render coupon cutout — try again.')
+        setError('Could not render cutout.')
         return
       }
 
@@ -261,7 +198,7 @@ export default function AdminPage() {
 
       await markDemoGenerated(previewData.previewCode)
     } catch {
-      setError('Network error — try again.')
+      setError('Network error.')
     } finally {
       setGeneratingCutout(false)
     }
@@ -273,20 +210,18 @@ export default function AdminPage() {
     try {
       const form = buildDesignForm()
       form.append('reuseBatch', 'true')
-
       const res = await fetch('/api/admin/demo-pdf', { method: 'POST', body: form })
       if (!res.ok) {
-        setError('Could not generate print sheet — preview a cutout first.')
+        setError('Generate a cutout first.')
         return
       }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       window.open(url, '_blank', 'noopener,noreferrer')
       setTimeout(() => URL.revokeObjectURL(url), 60_000)
-
       await markDemoGenerated(res.headers.get('X-Preview-Code'))
     } catch {
-      setError('Network error — try again.')
+      setError('Network error.')
     } finally {
       setDownloadingSheet(false)
     }
@@ -301,21 +236,27 @@ export default function AdminPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
       })
-      const data = await res.json() as { previewCode?: string; error?: string }
+      const data = await res.json() as { previewCode?: string }
       if (!res.ok || !data.previewCode) {
-        setError('Could not load redemption preview — try again.')
+        setError('Could not load preview.')
         return
       }
       await markDemoGenerated(data.previewCode)
     } catch {
-      setError('Network error — try again.')
+      setError('Network error.')
     } finally {
       setPreviewingRedemption(false)
     }
   }
 
-  const slice = VIEW_CYCLE[viewIndex % VIEW_CYCLE.length]!
-  const fd = useMemo(() => filterDashboard(stats ?? EMPTY_STATS, slice), [stats, slice])
+  const campaignKeys = useMemo(
+    () => sortedCampaignKeys(stats?.campaigns ?? {}),
+    [stats?.campaigns]
+  )
+
+  const redemptionPct = stats && stats.total > 0
+    ? Math.round((stats.redeemed / stats.total) * 100)
+    : 0
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault()
@@ -331,7 +272,7 @@ export default function AdminPage() {
   }
 
   const handleResetCoupon = async (code: string) => {
-    if (!confirm(`Clear redemption for ${code}? The coupon can be used again.`)) return
+    if (!confirm(`Reset ${code}?`)) return
     setResettingCode(code)
     setError('')
     try {
@@ -341,39 +282,37 @@ export default function AdminPage() {
       if (res.status === 401) {
         setStats(null)
         setPassword('')
-        setError('Session expired — sign in again.')
+        setError('Session expired.')
         return
       }
 
       if (!res.ok) {
         const map: Record<string, string> = {
-          unknown_code: 'That code does not exist in this project.',
-          not_redeemed: 'That code is already available (not redeemed).',
-          invalid_code: 'Invalid code format.',
-          demo_restricted: 'Only freshly generated coupon codes can be reset here.',
+          unknown_code: 'Code not found.',
+          not_redeemed: 'Not redeemed yet.',
+          invalid_code: 'Invalid code.',
+          demo_restricted: 'Only new demo codes can be reset.',
         }
         const key = typeof data.error === 'string' ? data.error : 'error'
-        setError(map[key] ?? `Could not reset: ${key}`)
+        setError(map[key] ?? `Could not reset.`)
         return
       }
 
       setStats(normalizeDashboard(data))
     } catch {
-      setError('Network error — try again.')
+      setError('Network error.')
     } finally {
       setResettingCode(null)
     }
   }
 
-  // ── Login form ─────────────────────────────────────
   if (!stats) {
     if (initialLoad) {
       return (
         <main className="page">
           <div className="card">
-            <div className="icon-wrap" style={{ background: '#f3e8ff', marginBottom: 20 }}>🔒</div>
             <h1 className="headline" style={{ fontSize: '1.5rem' }}>Admin</h1>
-            <p style={{ color: '#888', fontSize: '0.9rem', marginTop: 16 }}>Loading…</p>
+            <p className="subtext">Loading…</p>
           </div>
         </main>
       )
@@ -381,10 +320,9 @@ export default function AdminPage() {
     return (
       <main className="page">
         <div className="card">
-          <div className="icon-wrap" style={{ background: '#f3e8ff', marginBottom: 20 }}>🔒</div>
           <h1 className="headline" style={{ fontSize: '1.5rem' }}>Admin</h1>
           <form onSubmit={handleLogin} style={{ marginTop: 16 }}>
-            <label style={{ display: 'block', textAlign: 'left', fontSize: '0.85rem', fontWeight: 600, color: '#555' }}>
+            <label style={{ display: 'block', textAlign: 'left', fontSize: '0.875rem', fontWeight: 500, color: '#555' }}>
               Password
               <input
                 type="password"
@@ -405,268 +343,142 @@ export default function AdminPage() {
     )
   }
 
-  const stepView = (delta: number) => {
-    setViewIndex(i => {
-      const n = VIEW_CYCLE.length
-      return ((i + delta) % n + n) % n
-    })
-  }
-
   return (
     <div className="admin-page">
       <div className="admin-inner">
         <div className="admin-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h1 className="admin-title">Admin Dashboard</h1>
-            <p style={{ color: '#666', fontSize: '0.85rem', marginTop: 4 }}>
-              QR redemption stats across campaigns — use ‹ › to focus one brand or see combined totals.
-            </p>
-          </div>
+          <h1 className="admin-title">Admin</h1>
           {!stats.demoMode && (
-            <button
-              type="button"
-              onClick={() => { setStats(null); setPassword(''); setError(''); setViewIndex(0) }}
-              style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', color: '#555' }}
-            >
+            <button type="button" className="admin-btn-secondary" onClick={() => { setStats(null); setPassword(''); setError('') }}>
               Sign out
             </button>
           )}
         </div>
 
-        <div className="coupon-generator" style={{ marginTop: 20, padding: '16px 18px', background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 12 }}>
+        <div className="coupon-generator" style={{ marginTop: 16, padding: '16px 18px', background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 10 }}>
           <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-              <h2 className="section-title" style={{ marginBottom: 4 }}>Generate coupons</h2>
-              <p style={{ color: '#444', fontSize: '0.85rem', marginBottom: 8, lineHeight: 1.45 }}>
-                Every code is unique and single-use — redemption confirms the coupon is authentic, not a screenshot or duplicate.
+              <h2 className="section-title">Generate</h2>
+              <p className="admin-muted" style={{ marginBottom: 12 }}>
+                Unique single-use codes. Upload optional.
               </p>
-              <p style={{ color: '#666', fontSize: '0.82rem', marginBottom: 14 }}>
-                Upload your own design (optional) or use a default. Preview shows one printer cutout — the slip you&apos;d cut from the sheet.
-              </p>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#444', maxWidth: 360 }}>
-                Coupon design
+              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#444', maxWidth: 360 }}>
+                Design (PNG/JPG)
                 <input
                   type="file"
                   accept="image/png,image/jpeg,image/jpg"
                   onChange={e => setCouponDesign(e.target.files?.[0] ?? null)}
-                  style={{ display: 'block', marginTop: 6, fontSize: '0.8rem', width: '100%' }}
+                  style={{ display: 'block', marginTop: 6, fontSize: '0.875rem', width: '100%' }}
                 />
-                <span style={{ fontWeight: 400, color: '#888', fontSize: '0.75rem' }}>PNG or JPG · Playa default if empty</span>
               </label>
               {designPreview && (
-                <div style={{ marginTop: 12 }}>
-                  <img
-                    src={designPreview}
-                    alt="Uploaded coupon design preview"
-                    style={{ maxHeight: 100, maxWidth: '100%', borderRadius: 8, border: '1px solid #e5e7eb' }}
-                  />
-                </div>
+                <img
+                  src={designPreview}
+                  alt="Upload preview"
+                  style={{ marginTop: 10, maxHeight: 80, maxWidth: '100%', borderRadius: 6, border: '1px solid #e5e7eb' }}
+                />
               )}
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                 <button
                   type="button"
                   onClick={handlePreviewCutout}
                   disabled={generatingCutout || downloadingSheet || previewingRedemption}
                   className="btn-primary"
-                  style={{ marginTop: 0, padding: '10px 18px', width: 'auto', fontSize: '0.9rem' }}
+                  style={{ marginTop: 0, padding: '10px 16px', width: 'auto', fontSize: '0.875rem', fontWeight: 600 }}
                 >
-                  {generatingCutout ? 'Generating…' : 'Preview coupon cutout'}
+                  {generatingCutout ? '…' : 'Preview cutout'}
                 </button>
                 <button
                   type="button"
                   onClick={handlePreviewRedemption}
                   disabled={generatingCutout || downloadingSheet || previewingRedemption}
-                  style={{
-                    marginTop: 0,
-                    padding: '10px 18px',
-                    width: 'auto',
-                    fontSize: '0.9rem',
-                    borderRadius: 10,
-                    border: '1px solid #e5e7eb',
-                    background: '#fff',
-                    color: '#333',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
+                  className="admin-btn-secondary"
                 >
-                  {previewingRedemption ? 'Loading…' : 'Preview redemption'}
+                  {previewingRedemption ? '…' : 'Preview redeem'}
                 </button>
               </div>
 
               {cutoutPreviewUrl && (
-                <div style={{ marginTop: 18 }}>
-                  <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#444', marginBottom: 8 }}>
-                    Printer cutout — one slip
-                  </p>
-                  <div
-                    style={{
-                      maxWidth: 380,
-                      padding: 10,
-                      border: '2px dashed #c4c4c4',
-                      borderRadius: 6,
-                      background: '#fff',
-                      boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
-                    }}
-                  >
+                <div style={{ marginTop: 16 }}>
+                  <p className="section-title" style={{ marginBottom: 8, fontSize: '0.9rem' }}>Cutout</p>
+                  <div style={{ maxWidth: 360, padding: 8, border: '2px dashed #ccc', borderRadius: 6, background: '#fff' }}>
                     <iframe
                       src={cutoutPreviewUrl}
-                      title="Coupon cutout preview"
-                      style={{
-                        display: 'block',
-                        width: '100%',
-                        aspectRatio: String(CUTOUT_ASPECT),
-                        border: 'none',
-                        borderRadius: 2,
-                      }}
+                      title="Coupon cutout"
+                      style={{ display: 'block', width: '100%', aspectRatio: String(CUTOUT_ASPECT), border: 'none' }}
                     />
                   </div>
-                  <p style={{ fontSize: '0.75rem', color: '#888', marginTop: 8 }}>
-                    Cut along the dashed border · same size as one cell on the 2×5 print sheet
-                    {' · '}
-                    <button
-                      type="button"
-                      onClick={handleDownloadPrintSheet}
-                      disabled={downloadingSheet}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        padding: 0,
-                        color: '#2563eb',
-                        cursor: 'pointer',
-                        fontSize: 'inherit',
-                        textDecoration: 'underline',
-                      }}
-                    >
-                      {downloadingSheet ? 'Preparing…' : 'Download full print sheet'}
+                  <p className="admin-muted" style={{ marginTop: 6, fontSize: '0.8rem' }}>
+                    <button type="button" className="admin-btn-inline" onClick={handleDownloadPrintSheet} disabled={downloadingSheet}>
+                      {downloadingSheet ? '…' : 'Download print sheet'}
                     </button>
                   </p>
                 </div>
               )}
 
               {previewCode && (
-                <div style={{ marginTop: 18 }}>
-                  <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#444', marginBottom: 10 }}>
-                    Customer view — what they see after scanning
-                  </p>
-                  <div
-                    style={{
-                      width: 'min(100%, 300px)',
-                      border: '10px solid #1f2937',
-                      borderRadius: 28,
-                      overflow: 'hidden',
-                      boxShadow: '0 12px 32px rgba(0,0,0,0.12)',
-                      background: '#fff',
-                    }}
-                  >
+                <div style={{ marginTop: 16 }}>
+                  <p className="section-title" style={{ marginBottom: 8, fontSize: '0.9rem' }}>Redeem preview</p>
+                  <div style={{ width: 'min(100%, 280px)', border: '8px solid #1f2937', borderRadius: 24, overflow: 'hidden' }}>
                     <iframe
                       key={previewCode}
                       src={`/redeem?code=${encodeURIComponent(previewCode)}`}
-                      title="Redemption preview"
-                      style={{ display: 'block', width: '100%', height: 520, border: 'none' }}
+                      title="Redeem preview"
+                      style={{ display: 'block', width: '100%', height: 480, border: 'none' }}
                     />
                   </div>
-                  <p style={{ fontSize: '0.75rem', color: '#888', marginTop: 8 }}>
-                    Code <code style={{ background: '#f3f4f6', padding: '2px 6px', borderRadius: 4 }}>{previewCode}</code>
-                    {' · '}
-                    <a
-                      href={`/redeem?code=${encodeURIComponent(previewCode)}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: '#2563eb' }}
-                    >
-                      Open full screen
-                    </a>
-                  </p>
                 </div>
               )}
             </div>
 
-            <div style={{ flex: '0 1 200px', minWidth: 160 }}>
-              <p style={{ fontSize: '0.82rem', fontWeight: 600, color: '#444', marginBottom: 10 }}>Default designs</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ flex: '0 1 180px', minWidth: 140 }}>
+              <p className="section-title" style={{ fontSize: '0.9rem', marginBottom: 8 }}>Defaults</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div>
-                  <img
-                    src="/api/coupon-art/playa"
-                    alt="Playa Bowls default coupon"
-                    style={{ width: '100%', borderRadius: 8, border: '1px solid #e5e7eb', display: 'block' }}
-                  />
-                  <span style={{ fontSize: '0.72rem', color: '#888', marginTop: 4, display: 'block' }}>Playa Bowls</span>
+                  <img src="/api/coupon-art/playa" alt="Playa" style={{ width: '100%', borderRadius: 6, border: '1px solid #e5e7eb' }} />
+                  <span className="admin-muted" style={{ fontSize: '0.75rem', marginTop: 4, display: 'block' }}>Playa</span>
                 </div>
                 <div>
-                  <img
-                    src="/api/coupon-art/scoops"
-                    alt="Scoops default coupon"
-                    style={{ width: '100%', borderRadius: 8, border: '1px solid #e5e7eb', display: 'block' }}
-                  />
-                  <span style={{ fontSize: '0.72rem', color: '#888', marginTop: 4, display: 'block' }}>Scoops</span>
+                  <img src="/api/coupon-art/scoops" alt="Scoops" style={{ width: '100%', borderRadius: 6, border: '1px solid #e5e7eb' }} />
+                  <span className="admin-muted" style={{ fontSize: '0.75rem', marginTop: 4, display: 'block' }}>Scoops</span>
                 </div>
               </div>
             </div>
           </div>
         </div>
 
-        {error && (
-          <p className="error-msg" style={{ marginTop: 12, marginBottom: 0 }}>
-            {error}
-          </p>
-        )}
+        {error && <p className="error-msg" style={{ marginTop: 12 }}>{error}</p>}
 
-        <div className="admin-view-switch" role="group" aria-label="Program filter">
-          <button type="button" className="admin-view-arrow" aria-label="Previous program" onClick={() => stepView(-1)}>
-            ‹
-          </button>
-          <div className="admin-view-center">
-            <div className="admin-view-label">{fd.label}</div>
-            <p className="admin-view-sub">{fd.sub}</p>
-          </div>
-          <button type="button" className="admin-view-arrow" aria-label="Next program" onClick={() => stepView(1)}>
-            ›
-          </button>
-        </div>
-
-        <div className="stat-grid">
+        <div className="stat-grid" style={{ marginTop: 24 }}>
           <div className="stat-card">
-            <div className="stat-number">{fd.total}</div>
-            <div className="stat-label">{slice === 'all' ? 'Total QR codes' : 'QR codes (this slice)'}</div>
+            <div className="stat-number">{stats.total}</div>
+            <div className="stat-label">Total</div>
           </div>
           <div className="stat-card">
-            <div className="stat-number" style={{ backgroundImage: 'linear-gradient(135deg, #22c55e, #16a34a)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              {fd.redeemed}
-            </div>
+            <div className="stat-number stat-redeemed">{stats.redeemed}</div>
             <div className="stat-label">Redeemed</div>
           </div>
           <div className="stat-card">
-            <div className="stat-number" style={{ backgroundImage: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              {fd.remaining}
-            </div>
+            <div className="stat-number stat-remaining">{stats.remaining}</div>
             <div className="stat-label">Remaining</div>
           </div>
           <div className="stat-card">
-            <div className="stat-number" style={{ backgroundImage: 'linear-gradient(135deg, #f59e0b, #d97706)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              {fd.pct}%
-            </div>
-            <div className="stat-label">Redemption rate</div>
+            <div className="stat-number stat-rate">{redemptionPct}%</div>
+            <div className="stat-label">Rate</div>
           </div>
         </div>
 
-        {fd.campaignKeys.length > 0 && (
-          <div style={{ marginBottom: 28 }}>
-            <h2 className="section-title" style={{ marginBottom: 12 }}>
-              {slice === 'all' ? 'By campaign' : 'Campaign breakdown'}
-            </h2>
-            <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
-              {fd.campaignKeys.map(key => (
-                <div className="stat-card" key={key}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: 8, color: '#333', lineHeight: 1.3 }}>
-                    {stats.campaigns[key].heading}
-                  </div>
-                  <div style={{ fontSize: '0.68rem', color: '#888', marginBottom: 6, fontFamily: 'ui-monospace, monospace' }}>
-                    {campaignSlugFootnote(key)}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: '#555', display: 'grid', gap: 4 }}>
+        {campaignKeys.length > 0 && (
+          <div style={{ marginBottom: 24 }}>
+            <h2 className="section-title">Campaigns</h2>
+            <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
+              {campaignKeys.map(key => (
+                <div className="stat-card" key={key} style={{ textAlign: 'left' }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: 8 }}>{stats.campaigns[key].heading}</div>
+                  <div style={{ fontSize: '0.8rem', color: '#555', display: 'grid', gap: 2 }}>
                     <span>{stats.campaigns[key].total} total</span>
-                    <span>{stats.campaigns[key].remaining} remaining</span>
-                    <span style={{ color: '#16a34a' }}>{stats.campaigns[key].redeemed} redeemed</span>
+                    <span>{stats.campaigns[key].redeemed} redeemed</span>
+                    <span>{stats.campaigns[key].remaining} left</span>
                   </div>
                 </div>
               ))}
@@ -674,18 +486,9 @@ export default function AdminPage() {
           </div>
         )}
 
-        {slice !== 'all' && fd.total === 0 ? (
-          <div style={{ textAlign: 'center', padding: '28px 0', color: '#999', fontSize: '0.9rem' }}>
-            No QR codes in Redis for this slice yet — generate a batch or switch view with the arrows.
-          </div>
-        ) : fd.redeemedCodes.length > 0 ? (
+        {stats.redeemedCodes.length > 0 ? (
           <div>
-            <h2 className="section-title">Redeemed codes ({fd.redeemed})</h2>
-            <p style={{ color: '#888', fontSize: '0.78rem', marginTop: '-6px', marginBottom: 12 }}>
-              {fd.redeemedCodes.length < fd.redeemed
-                ? `Showing ${fd.redeemedCodes.length} recent redemptions · ${fd.redeemed.toLocaleString()} total in this slice.`
-                : 'Reset applies in Redis · the table respects the Playa / Scoops filter above.'}
-            </p>
+            <h2 className="section-title">Recent redemptions</h2>
             <div className="code-table admin-table-reset">
               <table>
                 <thead>
@@ -693,50 +496,37 @@ export default function AdminPage() {
                     <th>#</th>
                     <th>Code</th>
                     <th>Campaign</th>
-                    <th>Redeemed at</th>
-                    <th style={{ width: 88 }} aria-label="Actions" />
+                    <th>Redeemed</th>
+                    <th style={{ width: 72 }} aria-label="Actions" />
                   </tr>
                 </thead>
                 <tbody>
-                  {fd.redeemedCodes.map((row, i) => {
-                    const resetLocked = stats.demoMode && rowBucket(row) !== DEMO_BUCKET
+                  {stats.redeemedCodes.map((row, i) => {
+                    const resetLocked = stats.demoMode && (row.campaignBucket ?? ADMIN_ORIGINAL_BUCKET) !== DEMO_BUCKET
                     return (
-                    <tr key={`${row.code}-${row.redeemedAt}`}>
-                      <td style={{ color: '#999' }}>{i + 1}</td>
-                      <td>{row.code}</td>
-                      <td style={{ fontSize: '0.82rem', color: '#444' }}>
-                        {row.campaignHeading ?? '—'}
-                      </td>
-                      <td style={{ fontFamily: 'inherit', fontSize: '0.82rem', color: '#444' }}>
-                        {fmt(row.redeemedAt)}
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          disabled={resettingCode !== null || resetLocked}
-                          onClick={() => handleResetCoupon(row.code)}
-                          className="btn-reset-row"
-                          title={resetLocked ? 'Historical codes cannot be reset' : `Clear redemption for ${row.code}`}
-                        >
-                          {resettingCode === row.code ? '…' : 'Reset'}
-                        </button>
-                      </td>
-                    </tr>
+                      <tr key={`${row.code}-${row.redeemedAt}`}>
+                        <td style={{ color: '#999' }}>{i + 1}</td>
+                        <td>{row.code}</td>
+                        <td>{row.campaignHeading ?? '—'}</td>
+                        <td>{fmt(row.redeemedAt)}</td>
+                        <td>
+                          <button
+                            type="button"
+                            disabled={resettingCode !== null || resetLocked}
+                            onClick={() => handleResetCoupon(row.code)}
+                            className="btn-reset-row"
+                          >
+                            {resettingCode === row.code ? '…' : 'Reset'}
+                          </button>
+                        </td>
+                      </tr>
                     )
                   })}
                 </tbody>
               </table>
             </div>
           </div>
-        ) : stats.redeemed > 0 ? (
-          <div style={{ textAlign: 'center', padding: '32px 0', color: '#999' }}>
-            No redemptions in this slice · other campaigns may still have redeemed codes (switch view).
-          </div>
-        ) : (
-          <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
-            No coupons redeemed yet.
-          </div>
-        )}
+        ) : null}
       </div>
     </div>
   )
