@@ -1,19 +1,12 @@
 import { DEMO_CAMPAIGN } from '@/lib/demo-batch'
 import { generateCouponCutoutPdf } from '@/lib/pdf'
 import { getRedis } from '@/lib/redis'
-import * as fs from 'fs'
-import * as path from 'path'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
 
 const MAX_DESIGN_BYTES = 4 * 1024 * 1024
 const CODE_RE = /^[A-Z0-9]{8}$/
-
-const PRESETS: Record<string, { file: string; redeemPath: string }> = {
-  playa: { file: 'playabowls_coupon_with_qr.png', redeemPath: '/redeem' },
-  scoops: { file: 'scoops_coupon.png', redeemPath: '/scoops' },
-}
 
 function checkPassword(password: string): boolean {
   const adminPassword = process.env.ADMIN_PASSWORD?.trim()
@@ -26,7 +19,6 @@ export async function POST(req: NextRequest) {
   let password = ''
   let code = ''
   let designBytes: Buffer | undefined
-  let redeemPath = '/redeem'
 
   if (!contentType.includes('multipart/form-data')) {
     return NextResponse.json({ error: 'bad_request' }, { status: 400 })
@@ -35,7 +27,6 @@ export async function POST(req: NextRequest) {
   const form = await req.formData()
   password = String(form.get('password') ?? '')
   code = String(form.get('code') ?? '').trim().toUpperCase()
-  const preset = String(form.get('preset') ?? '').trim().toLowerCase()
 
   const design = form.get('design')
   if (design instanceof File && design.size > 0) {
@@ -43,13 +34,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'design_too_large' }, { status: 413 })
     }
     designBytes = Buffer.from(await design.arrayBuffer())
-  } else if (preset && PRESETS[preset]) {
-    const filePath = path.join(process.cwd(), PRESETS[preset].file)
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json({ error: 'preset_not_found' }, { status: 404 })
-    }
-    designBytes = fs.readFileSync(filePath)
-    redeemPath = PRESETS[preset].redeemPath
   }
 
   if (!checkPassword(password)) {
@@ -76,7 +60,7 @@ export async function POST(req: NextRequest) {
     code,
     siteUrl,
     backgroundBytes: designBytes,
-    redeemPath,
+    redeemPath: '/redeem',
   })
 
   return new NextResponse(Buffer.from(pdfBytes), {

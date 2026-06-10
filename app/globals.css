@@ -413,37 +413,127 @@ body {
   font-weight: 500;
 }
 
-.preview-row {
+.coupon-generator {
+  margin-top: 16px;
+  padding: 16px 18px;
+  background: #fafafa;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.generate-top {
   display: flex;
-  gap: 12px;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.generate-form {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.generate-form .admin-muted {
+  margin-bottom: 10px;
+}
+
+.generate-upload {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #444;
+  max-width: 320px;
+}
+
+.generate-upload input {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.875rem;
+  width: 100%;
+}
+
+.generate-upload-thumb {
+  margin-top: 8px;
+  max-height: 64px;
+  max-width: 160px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+}
+
+.generate-btn {
+  margin-top: 12px;
+  padding: 10px 16px;
+  width: auto;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.default-designs {
+  flex: 0 1 auto;
+}
+
+.default-designs-title {
+  font-size: 0.9rem;
+  margin-bottom: 8px;
+}
+
+.default-designs-row {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+}
+
+.default-design-item {
+  width: 100px;
+}
+
+.default-design-item img {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  display: block;
+}
+
+.default-design-item span {
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-top: 4px;
+  display: block;
+}
+
+.preview-expanded {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+  animation: preview-in 0.22s ease;
+}
+
+@keyframes preview-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.preview-expanded-inner {
+  display: flex;
+  gap: 16px;
   flex-wrap: wrap;
   align-items: flex-start;
-  margin-top: 14px;
 }
 
-.preview-cutout-slot,
-.preview-phone-slot {
-  flex: 0 0 auto;
-  width: 190px;
-}
-
-.preview-cutout-label {
-  font-size: 0.8rem;
-  font-weight: 600;
-  margin-bottom: 6px;
-  color: #444;
-}
-
-.preview-cutout-label-playa {
-  color: var(--pink-dark);
-}
-
-.preview-cutout-label-scoops {
-  color: #0077b6;
+.preview-label {
+  margin-bottom: 8px;
+  font-size: 0.9rem;
 }
 
 .preview-cutout-frame {
-  padding: 6px;
+  width: min(100%, 280px);
+  padding: 8px;
   border: 2px dashed #ccc;
   border-radius: 6px;
   background: #fff;
@@ -456,9 +546,15 @@ body {
   border: none;
 }
 
+.preview-download {
+  margin-top: 6px;
+  font-size: 0.8rem;
+}
+
 .preview-phone-frame {
-  border: 7px solid #1f2937;
-  border-radius: 20px;
+  width: min(100%, 280px);
+  border: 8px solid #1f2937;
+  border-radius: 24px;
   overflow: hidden;
   background: #fff;
 }
@@ -466,7 +562,7 @@ body {
 .preview-phone-iframe {
   display: block;
   width: 100%;
-  height: 300px;
+  height: 480px;
   border: none;
 }
 
