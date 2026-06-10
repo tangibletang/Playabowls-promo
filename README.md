@@ -1,195 +1,124 @@
-# Playa Bowls $2 Off Promo — Setup & Deployment Guide
+# Promo Coupon Platform — QR Redemption + Admin Dashboard
 
-A coupon redemption system for the Dartmouth Playa Bowls promo.  
-Students scan a QR code → confirm once at the register → cashier sees the live timestamp screen.
+A full-stack coupon redemption system built with **Next.js 14 (App Router)**, **Redis**, and **Vercel**.
+Originally built for a real campus promo (Playa Bowls + Scoops, $2-off coupons distributed as printed
+QR codes to ~600 students), now kept live as a **public, password-free demo**.
 
----
-
-## Step 0 — Install Node.js (5 min)
-
-1. Go to **nodejs.org** and download the **LTS** installer for macOS.
-2. Run the `.pkg` installer, click through defaults.
-3. Open **Terminal** (Spotlight → "Terminal") and verify:
-   ```
-   node --version   # should print v20.x.x or higher
-   npm --version    # should print 10.x.x or higher
-   ```
+**Live demo:** [hanover-coupons.vercel.app](https://hanover-coupons.vercel.app)
+**Admin dashboard:** [hanover-coupons.vercel.app/admin](https://hanover-coupons.vercel.app/admin) — open, no login required
 
 ---
 
-## Step 1 — Install Vercel CLI (2 min)
+## What it does
 
-```bash
-npm install -g vercel
+- **Single-use QR coupons.** Each code lives in a Redis hash as `{ redeemed, redeemedAt, campaign }`.
+  A student scans a printed QR → lands on `/redeem?code=XXXX` → confirms once → cashier sees a live
+  "redeemed at HH:MM:SS" screen. Re-scanning shows "already redeemed."
+- **Multi-campaign support.** The same Redis hash and redeem flow serve multiple brands/batches
+  (`Playa Bowls`, `Scoops`, and a `demo` batch), distinguished by a `campaign` tag and routed to
+  brand-specific copy/colors.
+- **Admin dashboard** (`/admin`) — live stats per campaign (total / redeemed / remaining /
+  redemption rate), a table of redeemed codes, and a one-click **reset** to un-redeem a code.
+- **On-demand demo coupon generator** — from the admin dashboard, click **"Generate Demo Coupons
+  (PDF)"** to mint 10 fresh, unique QR codes (tagged `campaign: "demo"`), write them to Redis, and
+  download a print-ready, branded PDF — all generated server-side in a single API call
+  (`pdf-lib` + `qrcode`, no external services).
+- **Print-ready PDF generation scripts** (`scripts/generate-pdf.ts`) for producing full coupon
+  sheets (300+ codes, 2×5 per Letter page, calibrated QR placement on the brand artwork).
+
+---
+
+## Demo mode
+
+The deployed `/admin` has **no password** — it's intentionally public for portfolio viewing:
+
+- The historical Playa Bowls / Scoops totals are **read-only**. Reset is restricted to codes in
+  the `demo` campaign bucket.
+- Click **"Generate Demo Coupons (PDF)"** to create your own batch of 10 QR codes and download the
+  PDF. Scan one (or open the `/redeem?code=...` link from the PDF) to walk through the full
+  redemption flow, then reset it from the dashboard.
+
+This behavior is controlled by a single environment variable: if `ADMIN_PASSWORD` is **set**,
+`/admin` requires a password and full reset access is restored (original production behavior). If
+it's **unset**, the dashboard runs in open demo mode as described above.
+
+---
+
+## Tech stack
+
+| Layer | Tech |
+|---|---|
+| Framework | Next.js 14 (App Router), TypeScript |
+| Hosting | Vercel |
+| Database | Redis (Vercel Marketplace / any Redis-compatible host) |
+| PDF generation | `pdf-lib` + `qrcode`, run both server-side (admin route) and via local scripts |
+| Styling | Plain CSS with custom properties — no UI framework |
+
+---
+
+## Architecture
+
+```
+app/
+  page.tsx               landing page
+  redeem/page.tsx         redemption flow (client component, state machine)
+  scoops/page.tsx          Scoops-branded redemption variant
+  admin/page.tsx           admin dashboard (client component)
+  api/
+    redeem/route.ts        GET = check code status, POST = consume code
+    admin/route.ts          POST = dashboard stats + code reset (demo-mode aware)
+    admin/demo-pdf/route.ts POST = generate a fresh demo batch + PDF (Node runtime)
+
+lib/
+  redis.ts                Redis client singleton
+  coupon-record.ts         shared types + campaign bucket/branding helpers
+  pdf.ts                   shared PDF generator used by the demo-pdf route
+
+scripts/
+  generate-codes.ts        one-time/per-campaign: generate N codes → Redis + CSV
+  generate-pdf.ts           local: codes.csv + brand artwork → print-ready PDF
 ```
 
-Log in to your Vercel account:
-```bash
-vercel login
+All codes live in a single Redis hash (`codes`), keyed by an 8-character code:
+
 ```
-A browser tab will open — click **Continue with GitHub** (or email).
+HSET codes  <CODE>  '{"redeemed": false, "campaign": "scoops-hanover"}'
+HSET codes  <CODE>  '{"redeemed": true, "redeemedAt": "2026-05-03T...", "campaign": "demo"}'
+```
 
 ---
 
-## Step 2 — Install project dependencies (1 min)
+## Running locally
 
 ```bash
-cd ~/Desktop/Playabowls-promo
 npm install
+cp .env.local.example .env.local
+# fill in REDIS_URL (any Redis instance) and NEXT_PUBLIC_SITE_URL
+# leave ADMIN_PASSWORD unset to run /admin in open demo mode locally
+npm run dev
+```
+
+To generate a one-off batch of codes + a printable PDF for a new campaign:
+
+```bash
+npm run generate-codes -- --campaign my-campaign --count 50
+PDF_CODES_CSV=./codes-my-campaign.csv npm run generate-pdf
 ```
 
 ---
 
-## Step 3 — Create a Vercel project + KV database (5 min)
+## Deploying
 
-### 3a. Link the folder to Vercel
 ```bash
 vercel link
-```
-When prompted:
-- "Set up and deploy?" → **Y**
-- "Which scope?" → pick your account
-- "Link to existing project?" → **N** (create new)
-- "What's your project name?" → `playabowls-promo` (or anything)
-- "In which directory is your code located?" → `.` (just press Enter)
-
-### 3b. Create a KV (Redis) database
-1. Go to **vercel.com/dashboard** → your project → **Storage** tab
-2. Click **Create Database** → choose **KV**
-3. Name it anything (e.g., `playabowls-kv`) → **Create & Continue**
-4. Click **Connect to Project** → select your project → **Connect**
-5. Go to the **`.env.local`** tab inside the KV dashboard — you'll see the credentials.
-
----
-
-## Step 4 — Set up environment variables (3 min)
-
-Copy the example file:
-```bash
-cp .env.local.example .env.local
-```
-
-Open `.env.local` in any text editor and fill in:
-```
-KV_REST_API_URL=   ← paste from the KV dashboard
-KV_REST_API_TOKEN= ← paste from the KV dashboard
-ADMIN_PASSWORD=    ← make up a password you'll remember
-NEXT_PUBLIC_SITE_URL=https://playabowls-promo.vercel.app  ← your Vercel URL (set after first deploy)
-```
-
-**Also add these to Vercel** (so the deployed app can read them):
-```bash
-vercel env add KV_REST_API_URL
-# paste the value, press Enter, choose Production + Preview + Development
-
-vercel env add KV_REST_API_TOKEN
-vercel env add ADMIN_PASSWORD
+vercel env add REDIS_URL
 vercel env add NEXT_PUBLIC_SITE_URL
-```
-
----
-
-## Step 5 — Deploy to Vercel (2 min)
-
-```bash
+# optional — set ADMIN_PASSWORD to lock down /admin instead of running it as an open demo
 vercel --prod
 ```
 
-After it finishes, you'll see something like:
-```
-✅  Production: https://playabowls-promo.vercel.app
-```
-
-**Update `NEXT_PUBLIC_SITE_URL`** in your `.env.local` with that URL.  
-Also update it on Vercel: `vercel env add NEXT_PUBLIC_SITE_URL` (overwrite).
-
----
-
-## Step 6 — Generate 300 coupon codes (1 min)
+To switch the live admin dashboard back to open demo mode, remove the env var:
 
 ```bash
-npm run generate-codes
-```
-
-This will:
-- Create 300 unique codes in your Vercel KV database
-- Write `codes.csv` to your project folder (300 redemption URLs)
-
-> ⚠️  Only run this **once**. Running it again will overwrite existing codes.
-
----
-
-## Step 7 — Generate the print PDF (5–10 min)
-
-### 7a. Add your coupon design
-Place your coupon background image in the project root:
-```
-~/Desktop/Playabowls-promo/coupon-bg.png
-```
-(JPG also works — the script will find it automatically.)
-
-The image will be stretched to **3.75" × 2.5"** per coupon slot.  
-Design at **2:1.33 ratio** for best results (e.g., 1500×1000px).
-
-### 7b. Configure QR position
-Open `scripts/generate-pdf.ts` and adjust these three variables at the top:
-```ts
-const QR_X    = 176   // points from left edge of coupon  (72pt = 1 inch)
-const QR_Y    = 20    // points from bottom edge of coupon
-const QR_SIZE = 80    // size of QR code square
-```
-Run once with a small test first, open the PDF, measure, adjust, re-run.
-
-### 7c. Generate
-```bash
-npm run generate-pdf
-```
-
-Output: `coupons.pdf` — **300 coupons**, 8 per page, ~38 pages, with cut lines.
-
-### 7d. Print tips
-- Print on **cardstock** (65 lb or heavier)
-- **Actual size** / 100% scale (don't "fit to page")
-- Guillotine-cut along the gray cut lines
-
----
-
-## Pages & features
-
-| URL | Description |
-|-----|-------------|
-| `/` | Landing page |
-| `/redeem?code=XXXXXXXX` | Redemption flow (mobile-first) |
-| `/admin` | Password-protected dashboard |
-
-### Redemption flow
-1. Student scans QR → lands on `/redeem?code=…`
-2. Sees confirmation screen with one-time-use warning
-3. Taps **Confirm** at the register
-4. Success screen shows "$2 off" + live updating clock (proves it's not a screenshot)
-
-### Admin dashboard
-Shows total/redeemed/remaining counts, list of redeemed codes with timestamps.  
-Password is whatever you set in `ADMIN_PASSWORD`.
-
----
-
-## Troubleshooting
-
-**"Missing KV credentials" when running generate-codes**  
-→ Make sure `.env.local` exists and has `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
-
-**Coupon shows "Invalid coupon" on the live site**  
-→ Make sure you ran `npm run generate-codes` *after* deploying (or at least with correct KV creds).
-
-**PDF is huge (>50 MB)**  
-→ Compress your background image before using it. Tools: squoosh.app (free, browser-based).
-
-**QR code is in the wrong spot**  
-→ Adjust `QR_X` and `QR_Y` in `generate-pdf.ts`.  
-Remember: origin is bottom-left of each coupon cell. Increase `QR_Y` to move up, increase `QR_X` to move right.
-
-**Need to redeploy after changes**  
-```bash
-vercel --prod
+vercel env rm ADMIN_PASSWORD production
 ```

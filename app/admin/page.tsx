@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useState, FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, FormEvent } from 'react'
 
 const ADMIN_ORIGINAL_BUCKET = '__original__'
 
@@ -34,6 +34,7 @@ interface Stats {
   remaining: number
   redeemedCodes: RedeemedCode[]
   campaigns: Record<string, CampaignTotals>
+  demoMode: boolean
 }
 
 const EMPTY_STATS: Stats = {
@@ -42,7 +43,10 @@ const EMPTY_STATS: Stats = {
   remaining: 0,
   redeemedCodes: [],
   campaigns: {},
+  demoMode: false,
 }
+
+const DEMO_BUCKET = 'demo'
 
 type ApiFail = 'unauthorized' | 'bad_request' | 'invalid_code' | 'unknown_code' | 'not_redeemed' | string
 
@@ -73,6 +77,7 @@ function normalizeDashboard(data: Record<string, unknown>): Stats {
     campaigns: (data.campaigns && typeof data.campaigns === 'object')
       ? data.campaigns as Record<string, CampaignTotals>
       : {},
+    demoMode: Boolean(data.demoMode),
   }
 }
 
@@ -141,9 +146,11 @@ export default function AdminPage() {
   const [password, setPassword] = useState('')
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(false)
+  const [checkingDemo, setCheckingDemo] = useState(true)
   const [error, setError] = useState('')
   const [resettingCode, setResettingCode] = useState<string | null>(null)
   const [viewIndex, setViewIndex] = useState(0)
+  const [generatingPdf, setGeneratingPdf] = useState(false)
 
   const refreshDashboard = useCallback(async (pwd: string) => {
     const res = await adminRequest(pwd)
@@ -154,6 +161,49 @@ export default function AdminPage() {
     }
     return { ok: true as const, stats: normalizeDashboard(data) }
   }, [])
+
+  // If the dashboard is open (no ADMIN_PASSWORD configured server-side), an empty
+  // password succeeds and we can skip the login screen entirely.
+  useEffect(() => {
+    let cancelled = false
+    refreshDashboard('').then(result => {
+      if (cancelled) return
+      if (result.ok) setStats(result.stats)
+      setCheckingDemo(false)
+    })
+    return () => { cancelled = true }
+  }, [refreshDashboard])
+
+  const handleGenerateDemoPdf = async () => {
+    setGeneratingPdf(true)
+    setError('')
+    try {
+      const res = await fetch('/api/admin/demo-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
+      if (!res.ok) {
+        setError('Could not generate demo PDF — try again.')
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'demo-coupons.pdf'
+      a.click()
+      URL.revokeObjectURL(url)
+
+      // Refresh so the new "demo" batch shows up in the dashboard.
+      const result = await refreshDashboard(password)
+      if (result.ok) setStats(result.stats)
+    } catch {
+      setError('Network error — try again.')
+    } finally {
+      setGeneratingPdf(false)
+    }
+  }
 
   const slice = VIEW_CYCLE[viewIndex % VIEW_CYCLE.length]!
   const fd = useMemo(() => filterDashboard(stats ?? EMPTY_STATS, slice), [stats, slice])
@@ -191,6 +241,7 @@ export default function AdminPage() {
           unknown_code: 'That code does not exist in this project.',
           not_redeemed: 'That code is already available (not redeemed).',
           invalid_code: 'Invalid code format.',
+          demo_restricted: 'Demo mode only allows resetting "demo" batch codes (use "Generate Demo Coupons" below).',
         }
         const key = typeof data.error === 'string' ? data.error : 'error'
         setError(map[key] ?? `Could not reset: ${key}`)
@@ -207,6 +258,17 @@ export default function AdminPage() {
 
   // ── Login form ─────────────────────────────────────
   if (!stats) {
+    if (checkingDemo) {
+      return (
+        <main className="page">
+          <div className="card">
+            <div className="icon-wrap" style={{ background: '#f3e8ff', marginBottom: 20 }}>🔒</div>
+            <h1 className="headline" style={{ fontSize: '1.5rem' }}>Admin</h1>
+            <p style={{ color: '#888', fontSize: '0.9rem', marginTop: 16 }}>Loading…</p>
+          </div>
+        </main>
+      )
+    }
     return (
       <main className="page">
         <div className="card">
@@ -251,14 +313,35 @@ export default function AdminPage() {
               Same redeem site for Playa and Scoops — use ‹ › to focus one brand or see combined totals.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => { setStats(null); setPassword(''); setError(''); setViewIndex(0) }}
-            style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', color: '#555' }}
-          >
-            Sign out
-          </button>
+          {!stats.demoMode && (
+            <button
+              type="button"
+              onClick={() => { setStats(null); setPassword(''); setError(''); setViewIndex(0) }}
+              style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', color: '#555' }}
+            >
+              Sign out
+            </button>
+          )}
         </div>
+
+        {stats.demoMode && (
+          <div style={{ marginTop: 16, padding: '12px 16px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, fontSize: '0.85rem', color: '#1e3a8a' }}>
+            <strong>🚀 Demo mode</strong> — this dashboard is open for portfolio viewing. The Playa/Scoops totals below are
+            real historical data and are read-only. Click <strong>Generate Demo Coupons</strong> to create your own batch
+            of fresh QR codes (campaign “demo”) and download a printable PDF — those are the only codes you can reset here.
+            <div style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                onClick={handleGenerateDemoPdf}
+                disabled={generatingPdf}
+                className="btn-primary"
+                style={{ marginTop: 0, padding: '10px 18px', width: 'auto', fontSize: '0.9rem' }}
+              >
+                {generatingPdf ? 'Generating…' : 'Generate Demo Coupons (PDF)'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {error && (
           <p className="error-msg" style={{ marginTop: 12, marginBottom: 0 }}>
@@ -363,7 +446,9 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {fd.redeemedCodes.map((row, i) => (
+                  {fd.redeemedCodes.map((row, i) => {
+                    const resetLocked = stats.demoMode && rowBucket(row) !== DEMO_BUCKET
+                    return (
                     <tr key={`${row.code}-${row.redeemedAt}`}>
                       <td style={{ color: '#999' }}>{i + 1}</td>
                       <td>{row.code}</td>
@@ -376,16 +461,17 @@ export default function AdminPage() {
                       <td>
                         <button
                           type="button"
-                          disabled={resettingCode !== null}
+                          disabled={resettingCode !== null || resetLocked}
                           onClick={() => handleResetCoupon(row.code)}
                           className="btn-reset-row"
-                          title={`Clear redemption for ${row.code}`}
+                          title={resetLocked ? 'Read-only in demo mode' : `Clear redemption for ${row.code}`}
                         >
                           {resettingCode === row.code ? '…' : 'Reset'}
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

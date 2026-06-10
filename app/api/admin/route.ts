@@ -28,9 +28,12 @@ type DashboardPayload = {
   remaining: number
   redeemedCodes: RedeemedRow[]
   campaigns: Record<string, CampaignTotals & { heading: string }>
+  demoMode: boolean
 }
 
-async function buildDashboard(redis: Awaited<ReturnType<typeof getRedis>>): Promise<DashboardPayload> {
+const DEMO_CAMPAIGN = 'demo'
+
+async function buildDashboard(redis: Awaited<ReturnType<typeof getRedis>>, demoMode: boolean): Promise<DashboardPayload> {
   const allCodes = await redis.hGetAll('codes')
   if (!allCodes) {
     return {
@@ -39,6 +42,7 @@ async function buildDashboard(redis: Awaited<ReturnType<typeof getRedis>>): Prom
       remaining: 0,
       redeemedCodes: [],
       campaigns: {},
+      demoMode,
     }
   }
 
@@ -91,6 +95,7 @@ async function buildDashboard(redis: Awaited<ReturnType<typeof getRedis>>): Prom
     remaining: entries.length - redeemedCount,
     redeemedCodes: redeemed,
     campaigns,
+    demoMode,
   }
 }
 
@@ -107,7 +112,9 @@ export async function POST(req: NextRequest) {
 
   const submitted = password.trim()
   const adminPassword = process.env.ADMIN_PASSWORD?.trim()
-  if (!adminPassword || submitted !== adminPassword) {
+  // No ADMIN_PASSWORD configured → public demo mode (dashboard open, resets limited to the "demo" campaign).
+  const demoMode = !adminPassword
+  if (!demoMode && submitted !== adminPassword) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
@@ -130,6 +137,10 @@ export async function POST(req: NextRequest) {
     const existing: CouponRecordPersisted =
       typeof rawExisting === 'string' ? JSON.parse(rawExisting) : rawExisting
 
+    if (demoMode && campaignBucket(existing) !== DEMO_CAMPAIGN) {
+      return NextResponse.json({ error: 'demo_restricted' }, { status: 403 })
+    }
+
     if (!existing.redeemed) {
       return NextResponse.json({ error: 'not_redeemed' }, { status: 409 })
     }
@@ -141,5 +152,5 @@ export async function POST(req: NextRequest) {
     await redis.hSet('codes', code, JSON.stringify(cleared))
   }
 
-  return NextResponse.json(await buildDashboard(redis))
+  return NextResponse.json(await buildDashboard(redis, demoMode))
 }

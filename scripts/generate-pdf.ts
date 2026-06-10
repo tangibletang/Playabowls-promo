@@ -130,11 +130,21 @@ function resolveQrBoxFill(backgroundPath: string | null): number {
 }
 
 function sheetMarginPt(uniform: boolean, backgroundPath: string | null): number {
+  const fromEnv = process.env.PDF_SHEET_MARGIN?.trim()
+  if (fromEnv) {
+    const n = Number.parseFloat(fromEnv)
+    if (Number.isFinite(n) && n >= 0) return n
+  }
   if (!uniform) return MARGIN
   if (!backgroundPath) return PLAYA_SHEET_MARGIN_PT
   const bn = path.basename(backgroundPath).toLowerCase()
   if (bn.includes('scoop')) return SCOOPS_SHEET_MARGIN_PT
   return PLAYA_SHEET_MARGIN_PT
+}
+
+function shouldStretchImageToCell(): boolean {
+  const raw = process.env.PDF_IMAGE_FIT?.trim().toLowerCase()
+  return raw === 'stretch'
 }
 
 // Fallback layout when artwork is generic or unknown (adjust by hand if needed):
@@ -171,6 +181,11 @@ function resolveRedeemPath(backgroundPath: string | null): string {
       : '/redeem'
   const p = raw || fallback
   return p.startsWith('/') ? p.replace(/\/$/, '') : `/${p.replace(/\/$/, '')}`
+}
+
+function shouldDrawQr(): boolean {
+  const raw = process.env.PDF_DISABLE_QR?.trim().toLowerCase()
+  return !(raw === '1' || raw === 'true' || raw === 'yes')
 }
 
 function resolveOutputPdfPath(backgroundPath: string | null): string {
@@ -222,6 +237,35 @@ function layoutQrInUniformCell(
   const qrY = boxBottomInCell + (sidePdf - qrSize) / 2
 
   return { ...u, qrX, qrY, qrSize }
+}
+
+/** For edge-to-edge output, stretch the artwork to the cell and center a square QR inside the stretched hole. */
+function layoutQrInStretchedCell(
+  imgW: number,
+  imgH: number,
+  hole: RasterHoleBox,
+  couponW: number,
+  couponH: number,
+  qrHoleFillFrac: number
+) {
+  const sx = couponW / imgW
+  const sy = couponH / imgH
+  const holeW = hole.w * sx
+  const holeH = hole.h * sy
+  const fromBottomPx = imgH - hole.top - hole.h
+
+  const boxLeftInCell = hole.left * sx
+  const boxBottomInCell = fromBottomPx * sy
+  const sidePdf = Math.min(holeW, holeH)
+
+  const qrSize = Math.max(
+    8,
+    Math.min(sidePdf - 2, Math.floor(sidePdf * Math.min(qrHoleFillFrac, 0.999)))
+  )
+  const qrX = boxLeftInCell + (holeW - qrSize) / 2
+  const qrY = boxBottomInCell + (holeH - qrSize) / 2
+
+  return { dx: 0, dy: 0, dw: couponW, dh: couponH, scale: Math.min(sx, sy), qrX, qrY, qrSize }
 }
 
 /** Playa / calibrated hole → uniform‑scale grid; generic stretch layouts stay denser unless you tweak env. */
@@ -294,6 +338,7 @@ async function main() {
   const { across: couponAcross, down: couponDown } = couponGrid(uniform)
   const sheetMargin = sheetMarginPt(uniform, bgPathForGrid)
   const qrBoxFill = resolveQrBoxFill(bgPathForGrid)
+  const stretchImageToCell = shouldStretchImageToCell()
   const couponW = (PAGE_W - sheetMargin * 2) / couponAcross
   const couponH = (PAGE_H - sheetMargin * 2) / couponDown
   const couponsPerPage = couponAcross * couponDown
@@ -323,8 +368,13 @@ async function main() {
   assertCsvMatchesArtwork(codeRows, bgPathForGrid, csvPath)
   const codes = codeRows.map(row => row.code)
   const redeemPath = resolveRedeemPath(bgPathForGrid)
+  const drawQr = shouldDrawQr()
   console.log(`Found ${codes.length} codes in ${csvPath}`)
-  console.log(`QR URLs use path: ${redeemPath}`)
+  if (drawQr) {
+    console.log(`QR URLs use path: ${redeemPath}`)
+  } else {
+    console.log('QR overlay disabled for this PDF.')
+  }
 
   const pdfDoc = await PDFDocument.create()
   pdfDoc.setTitle('Promotional coupons')
@@ -344,13 +394,15 @@ async function main() {
   if (resolvedBg?.filePath && bgImage && uniform && rasterQrHole) {
     const iw = bgImage.width
     const ih = bgImage.height
-    uniformLetterbox = layoutQrInUniformCell(iw, ih, rasterQrHole, couponW, couponH, qrBoxFill)
+    uniformLetterbox = stretchImageToCell
+      ? layoutQrInStretchedCell(iw, ih, rasterQrHole, couponW, couponH, qrBoxFill)
+      : layoutQrInUniformCell(iw, ih, rasterQrHole, couponW, couponH, qrBoxFill)
     qrX = uniformLetterbox.qrX
     qrY = uniformLetterbox.qrY
     qrSize = uniformLetterbox.qrSize
     showCodeOverlay = false
     console.log(
-      `📐  Uniform-fit ${iw}×${ih}px art (letterboxed); QR hole @ ${rasterQrHole.left},${rasterQrHole.top} ${rasterQrHole.w}×${rasterQrHole.h}px — QR ~${qrSize.toFixed(0)} pt`
+      `📐  ${stretchImageToCell ? 'Stretch-fit' : 'Uniform-fit'} ${iw}×${ih}px art${stretchImageToCell ? '' : ' (letterboxed)'}; QR hole @ ${rasterQrHole.left},${rasterQrHole.top} ${rasterQrHole.w}×${rasterQrHole.h}px — QR ~${qrSize.toFixed(0)} pt`
     )
   }
 
@@ -371,7 +423,14 @@ async function main() {
       const cellY = PAGE_H - sheetMargin - (row + 1) * couponH
 
       // Draw background image (Playa art: preserve aspect ratio so the white raster square stays square)
-      if (bgImage && uniformLetterbox) {
+      if (bgImage && stretchImageToCell) {
+        page.drawImage(bgImage, {
+          x: cellX,
+          y: cellY,
+          width: couponW,
+          height: couponH,
+        })
+      } else if (bgImage && uniformLetterbox) {
         page.drawImage(bgImage, {
           x: cellX + uniformLetterbox.dx,
           y: cellY + uniformLetterbox.dy,
@@ -396,17 +455,19 @@ async function main() {
         })
       }
 
-      // Generate and embed QR code
-      const url = `${SITE_URL}${redeemPath}?code=${code}`
-      const qrBuf = await qrPngBuffer(url)
-      const qrImg = await pdfDoc.embedPng(qrBuf)
+      if (drawQr) {
+        // Generate and embed QR code
+        const url = `${SITE_URL}${redeemPath}?code=${code}`
+        const qrBuf = await qrPngBuffer(url)
+        const qrImg = await pdfDoc.embedPng(qrBuf)
 
-      page.drawImage(qrImg, {
-        x: cellX + qrX,
-        y: cellY + qrY,
-        width: qrSize,
-        height: qrSize,
-      })
+        page.drawImage(qrImg, {
+          x: cellX + qrX,
+          y: cellY + qrY,
+          width: qrSize,
+          height: qrSize,
+        })
+      }
 
       if (showCodeOverlay) {
         page.drawText(code.toUpperCase(), {
